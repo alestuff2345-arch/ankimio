@@ -4,33 +4,39 @@ function plain(s){const d=new DOMParser().parseFromString(s,'text/html');d.query
 async function api(url,options){const r=await fetch(url,options);const d=await r.json();if(!r.ok)throw Error(d.error||'No se pudo completar la operación.');return d}
 function notice(s){$('#notice').textContent=s}
 async function load(){try{const decks=await api('/api/decks');$('#total').textContent=`(${decks.length})`;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p><div class="deck-actions"><button data-id="${d.id}" data-action="review">Repasar ↗</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
-let savingDeck=false;
-$('#newform').addEventListener('keydown',e=>{
+$('#newform').onsubmit=async e=>{e.preventDefault();try{await api('/api/decks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});$('#new').close();e.target.reset();load()}catch(e){notice(e.message)}};
+let savingCard=false;
+$('#addform').addEventListener('keydown',e=>{
     if(e.ctrlKey && e.key==='Enter' && !e.isComposing){
         e.preventDefault();
-        if(!e.repeat && !savingDeck) e.currentTarget.requestSubmit();
+        if(!e.repeat && !savingCard) e.currentTarget.requestSubmit();
     }
 });
-$('#newform').onsubmit=async e=>{
+$('#addform').onsubmit=async e=>{
     e.preventDefault();
-    if(savingDeck) return;
-    const form=e.currentTarget, input=form.elements.name, button=form.querySelector('button[type="submit"]');
-    const name=input.value.trim();
-    if(!name){input.setCustomValidity('Escribe un nombre para el mazo.');input.reportValidity();return;}
-    savingDeck=true;button.disabled=true;
-    $('#newstatus').textContent='Guardando…';
+    if(savingCard) return;
+    const form=e.currentTarget, button=form.querySelector('button[type="submit"]');
+    const front=form.elements.front.value.trim(), back=form.elements.back.value.trim();
+    if(!front || !back){
+        const field=!front?form.elements.front:form.elements.back;
+        field.setCustomValidity('Completa este campo.');field.reportValidity();return;
+    }
+    savingCard=true;button.disabled=true;
+    $('#cardstatus').textContent='Guardando…';
     try{
-        await api('/api/decks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+        await api(`/api/decks/${selected}/cards`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({front,back})});
         form.reset();
-        $('#newstatus').textContent=`Mazo «${name}» guardado. Puedes añadir otro.`;
-        input.focus();
+        $('#cardstatus').textContent='Tarjeta guardada. Puedes añadir otra.';
+        form.elements.front.focus();
         await load();
-    }catch(error){
-        $('#newstatus').textContent=error.message;
-    }finally{savingDeck=false;button.disabled=false;}
+    }catch(error){$('#cardstatus').textContent=error.message;}
+    finally{savingCard=false;button.disabled=false;}
 };
-$('#newform input').addEventListener('input',e=>e.target.setCustomValidity(''));
-$('#addform').onsubmit=async e=>{e.preventDefault();try{await api(`/api/decks/${selected}/cards`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});$('#add').close();e.target.reset();load()}catch(e){notice(e.message)}};
+$('#addform').addEventListener('input',e=>{
+    if(e.target.matches('textarea')) e.target.setCustomValidity('');
+    $('#cardstatus').textContent='';
+});
+$('#add').addEventListener('close',()=>{$('#cardstatus').textContent='';});
 $('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormData();form.append('file',e.target.files[0]);notice('Importando…');try{const r=await api('/api/import',{method:'POST',body:form});notice(`${r.count} tarjetas importadas en ${r.decks} mazos. ${r.warning}`);load()}catch(e){notice(e.message)}e.target.value=''};
 $('#decks').onclick=async e=>{const b=e.target.closest('button');if(!b)return;selected=b.dataset.id;if(b.dataset.action==='add')return $('#add').showModal();try{session=await api(`/api/decks/${selected}/cards`);if(!session.length)return notice('Añade tarjetas a este mazo para empezar.');exam=b.dataset.action==='exam';index=0;answers=[];$('#library').hidden=true;$('#study').hidden=false;notice('');if(exam){$('#study').innerHTML='<button onclick="leave()">← Mis mazos</button><h1>Tu prueba en el Grand Line.</h1><p>Responde sin mirar las soluciones y corrige al terminar. Sin límite de tiempo.</p><form id="config"><label>Número de preguntas<input id="amount" type="number" min="1" max="'+session.length+'" value="'+Math.min(20,session.length)+'" required></label><button class="primary">Comenzar simulacro</button></form>';$('#config').onsubmit=e=>{e.preventDefault();session=session.slice(0,Number($('#amount').value));show()}}else show()}catch(e){notice(e.message)}};
 function leave(){$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
