@@ -11,7 +11,7 @@ Abre el puerto 5000 en tu entorno. No requiere claves ni servicios externos. Es 
 
 ## Funciones
 - Crear mazos y tarjetas de pregunta/respuesta.
-- Repasar todo el mazo y reiniciar inmediatamente cuantas veces quieras.
+- Repasar todo el mazo y reiniciar inmediatamente cuantas veces quieras. En el repaso libre, Espacio muestra la respuesta y la siguiente pulsación pasa a la próxima tarjeta.
 - Simulacros aleatorios con cantidad de preguntas configurable, alternativas A–D y calificación automática al terminar. Los distractores son respuestas distintas de otras tarjetas del mismo mazo (hasta cuatro opciones; mínimo dos respuestas distintas). Las claves se muestran al finalizar. Es recomendable usar preguntas con una única respuesta válida. Los resultados son temporales.
 - Importación de texto de `.colpkg` y `.apkg`, tanto antiguos como modernos, incluidas colecciones comprimidas con Zstandard (`collection.anki21b`). Las colecciones modernas se leen con la biblioteca oficial de Anki, que interpreta sus plantillas y tarjetas cloze. Las colecciones antiguas conservan el lector anterior y su representación básica de cloze. No se importan archivos de imágenes, audio, CSS ni la programación de repasos; la interfaz muestra texto. No es necesario activar la exportación con compatibilidad antigua para las colecciones modernas probadas.
 - El contenido importado se muestra como texto, sin ejecutar HTML ni scripts.

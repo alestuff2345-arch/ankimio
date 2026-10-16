@@ -78,7 +78,7 @@ $('#decks').onclick=async e=>{
 function leave(){$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
 function show(){
     const c=session[index];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>${exam?'Simulacro':'Repaso libre'}</h2><span>${index+1} / ${session.length}</span></div><progress value="${index}" max="${session.length}"></progress><div class="flashcard"><span class="eyebrow">${exam?'MARCA UNA ALTERNATIVA':'PIENSA EN LA RESPUESTA'}</span><h2>${esc(plain(c.front))}</h2>${exam?`<fieldset class="choices"><legend>Elige tu respuesta</legend>${c.choices.map((text,i)=>`<label class="choice"><input type="radio" name="choice" value="${i}"><span class="choice-letter">${'ABCD'[i]}</span><span>${esc(text)}</span></label>`).join('')}</fieldset>`:`<div id="answer" hidden><hr><p>${esc(plain(c.back))}</p></div>`}</div><div class="actions">${exam?`<button class="primary" id="next" disabled>${index===session.length-1?'Terminar y ver resultados':'Siguiente pregunta →'}</button>`:'<button class="primary" id="reveal">Mostrar respuesta</button><button id="next" hidden>Siguiente tarjeta →</button>'}</div>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>${exam?'Simulacro':'Repaso libre'}</h2><span>${index+1} / ${session.length}</span></div><progress value="${index}" max="${session.length}"></progress><div class="flashcard"><span class="eyebrow">${exam?'MARCA UNA ALTERNATIVA':'PIENSA EN LA RESPUESTA'}</span><h2>${esc(plain(c.front))}</h2>${exam?`<fieldset class="choices"><legend>Elige tu respuesta</legend>${c.choices.map((text,i)=>`<label class="choice"><input type="radio" name="choice" value="${i}"><span class="choice-letter">${'ABCD'[i]}</span><span>${esc(text)}</span></label>`).join('')}</fieldset>`:`<div id="answer" hidden><hr><p>${esc(plain(c.back))}</p></div>`}</div><div class="actions">${exam?`<button class="primary" id="next" disabled>${index===session.length-1?'Terminar y ver resultados':'Siguiente pregunta →'}</button>`:'<button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><button id="next" aria-keyshortcuts="Space" hidden>Siguiente tarjeta →</button><p class="hint">Espacio: mostrar respuesta · Espacio otra vez: siguiente tarjeta.</p>'}</div>`;
     if(exam){
         document.querySelectorAll('input[name="choice"]').forEach(r=>r.onchange=()=>{$('#next').disabled=false;});
     }else $('#reveal').onclick=()=>{$('#answer').hidden=false;$('#next').hidden=false;$('#reveal').hidden=true};
@@ -96,6 +96,20 @@ function show(){
         }
     };
 }
+document.addEventListener('keydown',e=>{
+    if(e.code!=='Space' && e.key!==' ') return;
+    if(e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || e.isComposing) return;
+    if(exam || $('#study').hidden || document.querySelector('dialog[open]')) return;
+    const target=e.target;
+    if(target instanceof Element && (target.closest('input,textarea,select,a,[role="textbox"]') || target.isContentEditable)) return;
+    const reveal=$('#reveal'), next=$('#next');
+    const action=reveal && !reveal.hidden ? reveal : next && !next.hidden ? next : null;
+    if(!action || action.disabled) return;
+    const focusedButton=target instanceof Element ? target.closest('button') : null;
+    if(focusedButton && focusedButton!==reveal && focusedButton!==next) return;
+    e.preventDefault();
+    if(!e.repeat) action.click();
+});
 function results(){
     const correct=session.filter((c,i)=>answerKey(c.choices[answers[i]])===answerKey(answerText(c))).length;
     $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>El botín de tu aventura.</h1><p>Simulacro corregido. Estas son tus respuestas y las claves correctas.</p><h2 id="score">${correct} / ${session.length} correctas · ${Math.round(correct/session.length*100)}%</h2>${session.map((c,i)=>{
