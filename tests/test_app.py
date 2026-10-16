@@ -45,6 +45,22 @@ class Workflow(unittest.TestCase):
         with db() as c:self.assertEqual(c.execute('SELECT count(*) FROM cards').fetchone()[0],0)
         self.assertEqual(self.client.delete('/api/decks',json={'confirm':True}).json,{'decks':0,'cards':0})
 
+    def test_edit_card_is_persistent_and_scoped_to_deck(self):
+        key=self.client.post('/api/decks',json={'name':'Editable'}).json['id']
+        other=self.client.post('/api/decks',json={'name':'Otro'}).json['id']
+        self.client.post(f'/api/decks/{key}/cards',json={'front':'Original','back':'Original respuesta'})
+        card=self.client.get(f'/api/decks/{key}/cards').json[0]
+        url=f"/api/decks/{key}/cards/{card['id']}"
+        for body in ({'front':' ','back':'Respuesta'},{'front':'Pregunta','back':''},{'front':[], 'back':'Respuesta'},[]):
+            self.assertEqual(self.client.patch(url,json=body).status_code,400)
+        self.assertEqual(self.client.patch(f"/api/decks/{other}/cards/{card['id']}",json={'front':'Mal','back':'Mal'}).status_code,404)
+        self.assertEqual(self.client.get(f'/api/decks/{key}/cards').json[0]['front'],'Original')
+        self.assertEqual(self.client.patch(url,json={'front':' Nueva pregunta ','back':' Nueva respuesta '}).status_code,200)
+        saved=app.test_client().get(f'/api/decks/{key}/cards').json[0]
+        self.assertEqual(saved['front'],'Nueva pregunta');self.assertEqual(saved['back'],'Nueva respuesta')
+        self.assertEqual(saved['id'],card['id'])
+        self.assertEqual(self.client.patch(f'/api/decks/{key}/cards/missing',json={'front':'A','back':'B'}).status_code,404)
+
     def test_invalid_package(self):
         r=self.client.post('/api/import',data={'file':(io.BytesIO(b'bad'),'bad.colpkg')})
         self.assertEqual(r.status_code,400)

@@ -3,7 +3,7 @@ function esc(s){const e=document.createElement('div');e.textContent=s;return e.i
 function plain(s){const d=new DOMParser().parseFromString(s,'text/html');d.querySelectorAll('script,style').forEach(x=>x.remove());return d.body.textContent||''}
 async function api(url,options){const r=await fetch(url,options);const d=await r.json();if(!r.ok)throw Error(d.error||'No se pudo completar la operación.');return d}
 function notice(s){$('#notice').textContent=s}
-async function load(){try{const decks=await api('/api/decks');$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p><div class="deck-actions"><button data-id="${d.id}" data-action="review">Repasar ↗</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
+async function load(){try{const decks=await api('/api/decks');$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p><div class="deck-actions"><button data-id="${d.id}" data-action="review">Repasar ↗</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
 $('#deleteall').onclick=()=>{
     $('#deletestatus').textContent='';$('#deleteconfirm').showModal();
 };
@@ -58,6 +58,57 @@ $('#addform').addEventListener('input',e=>{
 });
 $('#add').addEventListener('close',()=>{$('#cardstatus').textContent='';});
 $('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormData();form.append('file',e.target.files[0]);notice('Importando…');try{const r=await api('/api/import',{method:'POST',body:form});notice(`${r.count} tarjetas importadas en ${r.decks} mazos. ${r.warning}`);load()}catch(e){notice(e.message)}e.target.value=''};
+let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=false;
+const pageSize=25;
+async function openBrowser(deck,name){
+    try{
+        const cards=await api(`/api/decks/${deck}/cards`);
+        browseDeck=deck;browseCards=cards.sort((a,b)=>plain(a.front).localeCompare(plain(b.front),'es'));browsePage=0;
+        $('#library').hidden=true;$('#study').hidden=false;notice('');
+        $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>Explorar mazo</h1><h2>${esc(name)}</h2><label>Buscar tarjetas<input type="search" id="cardsearch" placeholder="Buscar en preguntas y respuestas…"></label><p id="browsecount" role="status"></p><div id="cardlist"></div><div class="actions"><button id="browseprev">← Anterior</button><span id="browsepage"></span><button id="browsenext">Siguiente →</button></div>`;
+        $('#cardsearch').oninput=()=>{browsePage=0;renderBrowser();};
+        $('#browseprev').onclick=()=>{browsePage--;renderBrowser();};
+        $('#browsenext').onclick=()=>{browsePage++;renderBrowser();};
+        $('#cardlist').onclick=e=>{
+            const b=e.target.closest('button[data-edit]');if(!b)return;
+            editingCard=browseCards.find(c=>c.id===b.dataset.edit);if(!editingCard)return;
+            const form=$('#editform');form.elements.front.value=plain(editingCard.front);form.elements.back.value=plain(editingCard.back);
+            form.elements.front.setCustomValidity('');form.elements.back.setCustomValidity('');
+            $('#editstatus').textContent='';$('#edit').showModal();
+        };
+        renderBrowser();
+    }catch(error){notice(error.message);}
+}
+function renderBrowser(){
+    const search=$('#cardsearch').value.toLocaleLowerCase('es');
+    const filtered=browseCards.filter(c=>plain(c.front).toLocaleLowerCase('es').includes(search) || plain(c.back).toLocaleLowerCase('es').includes(search));
+    const pages=Math.max(1,Math.ceil(filtered.length/pageSize));browsePage=Math.min(Math.max(0,browsePage),pages-1);
+    $('#browsecount').textContent=`${filtered.length} de ${browseCards.length} tarjetas`;
+    $('#cardlist').innerHTML=filtered.slice(browsePage*pageSize,(browsePage+1)*pageSize).map(c=>`<article class="browse-card"><div><h3>${esc(plain(c.front).slice(0,220))}</h3><p><strong>Respuesta:</strong> ${esc(plain(c.back).slice(0,220))}</p></div><button data-edit="${esc(c.id)}">Editar</button></article>`).join('') || '<p class="empty">No hay tarjetas que mostrar.</p>';
+    $('#browsepage').textContent=`Página ${browsePage+1} de ${pages}`;
+    $('#browseprev').disabled=browsePage===0;$('#browsenext').disabled=browsePage>=pages-1;
+}
+$('#canceledit').onclick=()=>$('#edit').close();
+$('#edit').addEventListener('cancel',e=>{if(savingEdit)e.preventDefault();});
+$('#editform').oninput=e=>{if(e.target.matches('textarea'))e.target.setCustomValidity('');};
+$('#editform').onkeydown=e=>{
+    if(e.ctrlKey && e.key==='Enter' && !e.isComposing){e.preventDefault();if(!e.repeat && !savingEdit)e.currentTarget.requestSubmit();}
+};
+$('#editform').onsubmit=async e=>{
+    e.preventDefault();if(savingEdit || !editingCard)return;
+    const form=e.currentTarget, card=editingCard;
+    for(const name of ['front','back']){
+        if(!form.elements[name].value.trim()){form.elements[name].setCustomValidity('Completa este campo.');form.elements[name].reportValidity();return;}
+    }
+    const body={};
+    for(const name of ['front','back'])body[name]=form.elements[name].value===plain(card[name])?card[name]:form.elements[name].value.trim();
+    savingEdit=true;form.querySelectorAll('button').forEach(b=>b.disabled=true);$('#editstatus').textContent='Guardando…';
+    try{
+        await api(`/api/decks/${browseDeck}/cards/${card.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        Object.assign(card,body);$('#edit').close();renderBrowser();notice('Cambios guardados.');
+    }catch(error){$('#editstatus').textContent=error.message;}
+    finally{savingEdit=false;form.querySelectorAll('button').forEach(b=>b.disabled=false);}
+};
 function shuffled(items){
     const result=[...items];
     for(let i=result.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[result[i],result[j]]=[result[j],result[i]];}
@@ -73,6 +124,7 @@ function choicesFor(card){
 $('#decks').onclick=async e=>{
     const b=e.target.closest('button');if(!b)return;
     selected=b.dataset.id;if(b.dataset.action==='add')return $('#add').showModal();
+    if(b.dataset.action==='browse')return openBrowser(selected,b.closest('article').querySelector('h3').textContent);
     try{
         session=await api(`/api/decks/${selected}/cards`);
         if(!session.length)return notice('Añade tarjetas a este mazo para empezar.');

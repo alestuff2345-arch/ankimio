@@ -80,6 +80,19 @@ def cards(key):
     random.shuffle(rows)
     return jsonify(rows)
 
+@app.patch('/api/decks/<key>/cards/<card_id>')
+def edit_card(key,card_id):
+    body=request.get_json(silent=True)
+    if not isinstance(body,dict): return jsonify(error='Datos de tarjeta inválidos.'),400
+    front,back=body.get('front'),body.get('back')
+    if not isinstance(front,str) or not isinstance(back,str) or not front.strip() or not back.strip():
+        return jsonify(error='Completa la pregunta y la respuesta.'),400
+    with db() as c:
+        updated=c.execute('UPDATE cards SET front=?,back=? WHERE id=? AND deck=?',
+                          (front.strip(),back.strip(),card_id,key)).rowcount
+        if not updated: return jsonify(error='La tarjeta ya no existe en este mazo.'),404
+    return jsonify(ok=True)
+
 def unpack(raw):
     if raw.startswith(b'\x28\xb5\x2f\xfd'):
         with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(raw)) as reader:
