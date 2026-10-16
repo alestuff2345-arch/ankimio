@@ -1,4 +1,4 @@
-const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool;
+const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown;
 function esc(s){const e=document.createElement('div');e.textContent=s;return e.innerHTML}
 function plain(s){const d=new DOMParser().parseFromString(s,'text/html');d.querySelectorAll('script,style').forEach(x=>x.remove());return d.body.textContent||''}
 async function api(url,options){const r=await fetch(url,options);const d=await r.json();if(!r.ok)throw Error(d.error||'No se pudo completar la operación.');return d}
@@ -72,43 +72,68 @@ $('#decks').onclick=async e=>{
                 e.preventDefault();
                 session=session.slice(0,Number($('#amount').value)).map(c=>({...c,choices:choicesFor(c)}));show();
             };
-        }else show();
+        }else startReview(session);
     }catch(e){notice(e.message)}
 };
 function leave(){$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
+function startReview(cards){
+    reviewDeck=[...cards];reviewQueue=shuffled(cards);reviewKnown=0;showReview();
+}
+function showReview(){
+    if(!reviewQueue.length){
+        $('#study').innerHTML=`<div class="empty"><span>✳</span><h1>¡Ya te las sabes todas!</h1><p>Has marcado las ${reviewDeck.length} tarjetas como Bien o Fácil. Puedes repasar el mazo completo otra vez, sin esperar.</p><button class="primary" id="again">Repasar todo de nuevo</button> <button onclick="leave()">Mis mazos</button></div>`;
+        $('#again').onclick=()=>startReview(reviewDeck);
+        return;
+    }
+    const c=reviewQueue[0];
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Repaso libre</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><h2>${esc(plain(c.front))}</h2><div id="answer" hidden><hr><p>${esc(plain(c.back))}</p></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
+    $('#reveal').onclick=()=>{
+        $('#answer').hidden=false;$('#ratings').hidden=false;$('#reveal').hidden=true;
+        $('#reviewhint').textContent='1: Otra vez · 2: Difícil · 3: Bien · 4: Fácil · Espacio: Bien.';
+    };
+    $('#ratings').onclick=e=>{
+        const button=e.target.closest('button[data-rating]');if(!button || $('#answer').hidden)return;
+        const card=reviewQueue.shift(), rating=button.dataset.rating;
+        if(rating==='again' || rating==='hard'){
+            // Repeat within this session: sooner for Again, later for Hard.
+            reviewQueue.splice(Math.min(rating==='again'?1:3,reviewQueue.length),0,card);
+        }else reviewKnown++;
+        showReview();
+    };
+}
 function show(){
     const c=session[index];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>${exam?'Simulacro':'Repaso libre'}</h2><span>${index+1} / ${session.length}</span></div><progress value="${index}" max="${session.length}"></progress><div class="flashcard"><span class="eyebrow">${exam?'MARCA UNA ALTERNATIVA':'PIENSA EN LA RESPUESTA'}</span><h2>${esc(plain(c.front))}</h2>${exam?`<fieldset class="choices"><legend>Elige tu respuesta</legend>${c.choices.map((text,i)=>`<label class="choice"><input type="radio" name="choice" value="${i}"><span class="choice-letter">${'ABCD'[i]}</span><span>${esc(text)}</span></label>`).join('')}</fieldset>`:`<div id="answer" hidden><hr><p>${esc(plain(c.back))}</p></div>`}</div><div class="actions">${exam?`<button class="primary" id="next" disabled>${index===session.length-1?'Terminar y ver resultados':'Siguiente pregunta →'}</button>`:'<button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><button id="next" aria-keyshortcuts="Space" hidden>Siguiente tarjeta →</button><p class="hint">Espacio: mostrar respuesta · Espacio otra vez: siguiente tarjeta.</p>'}</div>`;
-    if(exam){
-        document.querySelectorAll('input[name="choice"]').forEach(r=>r.onchange=()=>{$('#next').disabled=false;});
-    }else $('#reveal').onclick=()=>{$('#answer').hidden=false;$('#next').hidden=false;$('#reveal').hidden=true};
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Simulacro</h2><span>${index+1} / ${session.length}</span></div><progress value="${index}" max="${session.length}"></progress><div class="flashcard"><span class="eyebrow">MARCA UNA ALTERNATIVA</span><h2>${esc(plain(c.front))}</h2><fieldset class="choices"><legend>Elige tu respuesta</legend>${c.choices.map((text,i)=>`<label class="choice"><input type="radio" name="choice" value="${i}"><span class="choice-letter">${'ABCD'[i]}</span><span>${esc(text)}</span></label>`).join('')}</fieldset></div><div class="actions"><button class="primary" id="next" disabled>${index===session.length-1?'Terminar y ver resultados':'Siguiente pregunta →'}</button></div>`;
+    document.querySelectorAll('input[name="choice"]').forEach(r=>r.onchange=()=>{$('#next').disabled=false;});
     $('#next').onclick=()=>{
-        if(exam){
-            const marked=$('input[name="choice"]:checked');if(!marked)return;
-            answers.push(Number(marked.value));
-        }
-        index++;
-        if(index<session.length)show();
-        else if(exam)results();
-        else{
-            $('#study').innerHTML='<div class="empty"><span>✳</span><h1>¡Otra isla conquistada!</h1><p>Has repasado todas las tarjetas. Puedes volver a empezar ahora mismo.</p><button class="primary" id="again">Volver a repasar</button> <button onclick="leave()">Mis mazos</button></div>';
-            $('#again').onclick=()=>{index=0;session=shuffled(session);show()};
-        }
+        const marked=$('input[name="choice"]:checked');if(!marked)return;
+        answers.push(Number(marked.value));index++;
+        if(index<session.length)show();else results();
     };
 }
 document.addEventListener('keydown',e=>{
-    if(e.code!=='Space' && e.key!==' ') return;
+    const space=e.code==='Space' || e.key===' ';
+    if(!space && !['1','2','3','4'].includes(e.key)) return;
     if(e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || e.isComposing) return;
     if(exam || $('#study').hidden || document.querySelector('dialog[open]')) return;
     const target=e.target;
     if(target instanceof Element && (target.closest('input,textarea,select,a,[role="textbox"]') || target.isContentEditable)) return;
-    const reveal=$('#reveal'), next=$('#next');
-    const action=reveal && !reveal.hidden ? reveal : next && !next.hidden ? next : null;
-    if(!action || action.disabled) return;
+    const reveal=$('#reveal'), ratings=$('#ratings');
+    if(!reveal || !ratings)return;
+    const revealed=!ratings.hidden;
+    let action;
+    if(space) action=revealed ? $('[data-rating="good"]') : reveal;
+    else if(revealed) action=ratings.querySelector(`[data-rating="${['again','hard','good','easy'][Number(e.key)-1]}"]`);
+    if(!action || action.disabled)return;
     const focusedButton=target instanceof Element ? target.closest('button') : null;
-    if(focusedButton && focusedButton!==reveal && focusedButton!==next) return;
-    e.preventDefault();
-    if(!e.repeat) action.click();
+    if(space && focusedButton && focusedButton!==reveal){
+        // Preserve native Space activation on a focused difficulty button.
+        if(focusedButton.closest('#ratings')){
+            e.preventDefault();if(!e.repeat)focusedButton.click();return;
+        }
+        return;
+    }
+    e.preventDefault();if(!e.repeat)action.click();
 });
 function results(){
     const correct=session.filter((c,i)=>answerKey(c.choices[answers[i]])===answerKey(answerText(c))).length;
