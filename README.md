@@ -12,7 +12,7 @@ Abre el puerto 5000 en tu entorno. No requiere claves ni servicios externos. Es 
 ## Funciones
 - Crear mazos y tarjetas de pregunta/respuesta.
 - Repasar todo el mazo y reiniciar inmediatamente cuantas veces quieras.
-- Simulacros aleatorios con cantidad de preguntas configurable, respuestas escritas y autocorrección al finalizar. Los resultados de simulacro son temporales; no se califican automáticamente.
+- Simulacros aleatorios con cantidad de preguntas configurable, alternativas A–D y calificación automática al terminar. Los distractores son respuestas distintas de otras tarjetas del mismo mazo (hasta cuatro opciones; mínimo dos respuestas distintas). Las claves se muestran al finalizar. Es recomendable usar preguntas con una única respuesta válida. Los resultados son temporales.
 - Importación de texto de `.colpkg` y `.apkg` con esquema Anki legado. Para colecciones recientes, exportar desde Anki con «Compatibilidad con versiones anteriores» activada. Se admite compresión Zstandard con esquema legado. Las imágenes, audio, CSS, plantillas avanzadas y programación de repasos no se importan. Los cloze se convierten a una representación básica; no hay equivalencia completa con el renderizado de Anki.
 - El contenido importado se muestra como texto, sin ejecutar HTML ni scripts.
 
