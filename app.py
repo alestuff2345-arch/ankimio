@@ -3,6 +3,8 @@ from pathlib import Path
 from flask import Flask, jsonify, request, render_template, send_file
 import zstandard
 import hmac
+from anki.collection import Collection
+from anki.errors import AnkiException
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 128 * 1024 * 1024
@@ -85,39 +87,74 @@ def render(template, fields, answer=False):
         return re.sub(r'{{c\d+::(.*?)(?:::(.*?))?}}', lambda x: x[1] if answer else '['+(x[2] or '…')+']',value)
     return re.sub(r'{{([^{}]+)}}',sub,template)
 
+def collection_cards(path):
+    """Read legacy metadata directly; use Anki for modern normalized schemas."""
+    source=sqlite3.connect(path)
+    try:
+        meta=source.execute('SELECT decks, models FROM col').fetchone()
+        if meta is None: raise ValueError('La colección de Anki no contiene metadatos.')
+        deckmap,models=json.loads(meta[0] or '{}'),json.loads(meta[1] or '{}')
+        if models:
+            rows=source.execute('SELECT cards.did,cards.ord,notes.mid,notes.flds FROM cards JOIN notes ON notes.id=cards.nid').fetchall()
+        else: rows=None
+    finally: source.close()
+    if rows is not None:
+        result=[]
+        for did,ordinal,mid,values in rows:
+            model=models[str(mid)]
+            fields={f['name']:v for f,v in zip(model['flds'],values.split('\x1f'))}
+            templates=model['tmpls']
+            if not templates: raise ValueError('El mazo contiene un tipo de nota sin plantillas.')
+            template=templates[0 if model.get('type')==1 else ordinal % len(templates)]
+            result.append((did,deckmap.get(str(did),{}).get('name','Importado'),
+                           render(template['qfmt'],fields),render(template['afmt'],fields,True)))
+        return result
+    # Opening a temporary copy lets Anki decode protobuf metadata and render
+    # modern templates/cloze cards without altering the user's original file.
+    collection=Collection(str(path))
+    try:
+        result=[]
+        for cid,did,odid in collection.db.all('SELECT id,did,odid FROM cards'):
+            card=collection.get_card(cid)
+            front,back=card.question(),card.answer()
+            # Basic Anki templates include FrontSide before this answer marker.
+            parts=re.split(r"<hr\b(?=[^>]*\bid\s*=\s*[\"']?answer\b)[^>]*>",back,maxsplit=1,flags=re.I)
+            if len(parts)==2: back=parts[1].strip()
+            deck=collection.decks.get(odid or did)
+            result.append((odid or did,deck['name'] if deck else 'Importado',front,back))
+        return result
+    finally: collection.close()
+
 @app.post('/api/import')
 def import_deck():
     upload=request.files.get('file')
-    if not upload or not upload.filename.lower().endswith(('.colpkg','.apkg')): return jsonify(error='Selecciona un archivo .colpkg o .apkg.'),400
+    if not upload or not upload.filename.lower().endswith(('.colpkg','.apkg')):
+        return jsonify(error='Selecciona un archivo .colpkg o .apkg.'),400
     try:
         with zipfile.ZipFile(upload) as archive:
-            if sum(x.file_size for x in archive.infolist())>256*1024*1024: raise ValueError('El paquete supera el límite de 256 MB descomprimidos.')
+            if sum(x.file_size for x in archive.infolist())>256*1024*1024:
+                raise ValueError('El paquete supera el límite de 256 MB descomprimidos.')
             candidates=[n for n in ('collection.anki21b','collection.anki21','collection.anki2') if n in archive.namelist()]
             if not candidates: raise ValueError('No se encontró una colección Anki.')
             raw=unpack(archive.read(candidates[0]))
+            if not raw.startswith(b'SQLite format 3\x00'):
+                raise ValueError('La colección no contiene una base de datos Anki válida.')
             with tempfile.TemporaryDirectory() as tmp:
-                path=Path(tmp)/'collection.db'; path.write_bytes(raw)
-                source=sqlite3.connect(path)
-                try:
-                    meta=source.execute('SELECT decks, models FROM col').fetchone()
-                    deckmap, models=json.loads(meta[0]),json.loads(meta[1])
-                    if not models: raise ValueError('Esta colección usa el esquema moderno de Anki. Expórtala con «Compatibilidad con versiones anteriores» activada.')
-                    rows=source.execute('SELECT cards.did,cards.ord,notes.mid,notes.flds FROM cards JOIN notes ON notes.id=cards.nid').fetchall()
-                finally: source.close()
-        pending=[]; imported={}; batch=uuid.uuid4().hex
-        for did, ordinal, mid, values in rows:
-            model=models[str(mid)]; fields={f['name']:v for f,v in zip(model['flds'],values.split('\x1f'))}
-            templates=model['tmpls']; template=templates[0 if model.get('type')==1 else ordinal % len(templates)]
-            front=render(template['qfmt'],fields); back=render(template['afmt'],fields,True)
-            key=batch+'-'+str(did); imported[key]=deckmap.get(str(did),{}).get('name','Importado')
+                path=Path(tmp)/'collection.anki2';path.write_bytes(raw)
+                rows=collection_cards(path)
+        pending=[];imported={};batch=uuid.uuid4().hex
+        for did,name,front,back in rows:
+            key=batch+'-'+str(did);imported[key]=name
             pending.append((uuid.uuid4().hex,key,front,back))
         if not pending: raise ValueError('El paquete no contiene tarjetas.')
         with db() as c:
             c.executemany('INSERT INTO decks VALUES (?,?)',imported.items())
             c.executemany('INSERT INTO cards VALUES (?,?,?,?)',pending)
-        return jsonify(count=len(pending),decks=len(imported),warning='Se importó el texto. Las imágenes, audio, estilos y plantillas avanzadas de Anki todavía no se importan.')
-    except (ValueError,KeyError,sqlite3.Error,zipfile.BadZipFile,RuntimeError,zstandard.ZstdError) as e:
-        return jsonify(error=str(e) if isinstance(e,ValueError) else 'No se pudo leer el paquete. Prueba una exportación de Anki compatible con versiones anteriores.'),400
+        return jsonify(count=len(pending),decks=len(imported),warning='Se importó el texto. Las imágenes, audio y estilos de Anki todavía no se importan.')
+    except (ValueError,KeyError,IndexError,TypeError,sqlite3.Error,zipfile.BadZipFile,
+            RuntimeError,OSError,EOFError,zstandard.ZstdError,AnkiException) as e:
+        message=str(e) if isinstance(e,ValueError) and not isinstance(e,json.JSONDecodeError) else 'No se pudo leer la colección. El archivo puede estar dañado o usar un formato aún no compatible.'
+        return jsonify(error=message),400
 
 @app.errorhandler(413)
 def too_large(e): return jsonify(error='El archivo supera el límite de 128 MB.'),413
