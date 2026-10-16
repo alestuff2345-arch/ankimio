@@ -3,7 +3,27 @@ function esc(s){const e=document.createElement('div');e.textContent=s;return e.i
 function plain(s){const d=new DOMParser().parseFromString(s,'text/html');d.querySelectorAll('script,style').forEach(x=>x.remove());return d.body.textContent||''}
 async function api(url,options){const r=await fetch(url,options);const d=await r.json();if(!r.ok)throw Error(d.error||'No se pudo completar la operación.');return d}
 function notice(s){$('#notice').textContent=s}
-async function load(){try{const decks=await api('/api/decks');$('#total').textContent=`(${decks.length})`;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p><div class="deck-actions"><button data-id="${d.id}" data-action="review">Repasar ↗</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
+async function load(){try{const decks=await api('/api/decks');$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p><div class="deck-actions"><button data-id="${d.id}" data-action="review">Repasar ↗</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
+$('#deleteall').onclick=()=>{
+    $('#deletestatus').textContent='';$('#deleteconfirm').showModal();
+};
+$('#canceldelete').onclick=()=>$('#deleteconfirm').close();
+let deletingDecks=false;
+$('#deleteconfirm').addEventListener('cancel',e=>{if(deletingDecks)e.preventDefault();});
+$('#deleteform').onsubmit=async e=>{
+    e.preventDefault();if(deletingDecks)return;
+    deletingDecks=true;
+    const buttons=[...e.currentTarget.querySelectorAll('button')];
+    buttons.forEach(b=>b.disabled=true);$('#deletestatus').textContent='Eliminando…';
+    try{
+        const result=await api('/api/decks',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
+        selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;
+        $('#study').hidden=true;$('#study').innerHTML='';$('#library').hidden=false;
+        $('#deleteconfirm').close();
+        await load();notice(`Se eliminaron ${result.decks} mazos y ${result.cards} tarjetas.`);
+    }catch(error){$('#deletestatus').textContent=error.message;}
+    finally{deletingDecks=false;buttons.forEach(b=>b.disabled=false);}
+};
 $('#newform').onsubmit=async e=>{e.preventDefault();try{await api('/api/decks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});$('#new').close();e.target.reset();load()}catch(e){notice(e.message)}};
 let savingCard=false;
 $('#addform').addEventListener('keydown',e=>{

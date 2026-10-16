@@ -28,6 +28,23 @@ class Workflow(unittest.TestCase):
             self.assertEqual(r.status_code,200,r.json);self.assertEqual(r.json['count'],1)
             deck=next(d for d in self.client.get('/api/decks').json if d['name']=='Importado')
             self.assertEqual(self.client.get('/api/decks/'+deck['id']+'/cards').json[0]['back'],'Lima')
+    def test_delete_all_requires_confirmation_and_removes_cards(self):
+        from app import db
+        keys=[]
+        for name in ('Borrar uno','Borrar dos'):
+            key=self.client.post('/api/decks',json={'name':name}).json['id'];keys.append(key)
+            self.client.post(f'/api/decks/{key}/cards',json={'front':'Pregunta','back':'Respuesta'})
+        for body in ({}, {'confirm':False}, {'confirm':'true'}, []):
+            self.assertEqual(self.client.delete('/api/decks',json=body).status_code,400)
+        self.assertTrue(all(self.client.get(f'/api/decks/{key}/cards').json for key in keys))
+        r=self.client.delete('/api/decks',json={'confirm':True})
+        self.assertEqual(r.status_code,200)
+        self.assertGreaterEqual(r.json['decks'],2)
+        self.assertGreaterEqual(r.json['cards'],2)
+        self.assertEqual(self.client.get('/api/decks').json,[])
+        with db() as c:self.assertEqual(c.execute('SELECT count(*) FROM cards').fetchone()[0],0)
+        self.assertEqual(self.client.delete('/api/decks',json={'confirm':True}).json,{'decks':0,'cards':0})
+
     def test_invalid_package(self):
         r=self.client.post('/api/import',data={'file':(io.BytesIO(b'bad'),'bad.colpkg')})
         self.assertEqual(r.status_code,400)
@@ -41,6 +58,7 @@ class TrialAccess(unittest.TestCase):
         with patch.dict(os.environ, {'ANKIMIO_PASSWORD': 'test-password-only'}):
             client = app.test_client()
             self.assertEqual(client.get('/api/decks').status_code, 401)
+            self.assertEqual(client.delete('/api/decks',json={'confirm':True}).status_code,401)
             self.assertEqual(client.get('/').status_code, 401)
             self.assertEqual(client.get('/healthz').json, {'status': 'ok'})
             token = base64.b64encode(b'ankimio:test-password-only').decode()

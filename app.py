@@ -54,6 +54,16 @@ def create():
     with db() as c: c.execute('INSERT INTO decks VALUES (?,?)', (key,name))
     return jsonify(id=key), 201
 
+@app.delete('/api/decks')
+def delete_all_decks():
+    body=request.get_json(silent=True)
+    if not isinstance(body,dict) or body.get('confirm') is not True:
+        return jsonify(error='Confirma que deseas eliminar todos los mazos y sus tarjetas.'),400
+    with db() as c:
+        cards=c.execute('DELETE FROM cards').rowcount
+        decks=c.execute('DELETE FROM decks').rowcount
+    return jsonify(decks=decks,cards=cards)
+
 @app.post('/api/decks/<key>/cards')
 def add(key):
     body = request.get_json() or {}
