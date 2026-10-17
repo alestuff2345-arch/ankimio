@@ -1,4 +1,4 @@
-const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown;
+const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown,reviewHistory=[];
 function esc(s){const e=document.createElement('div');e.textContent=s;return e.innerHTML}
 function plain(s){const d=new DOMParser().parseFromString(s,'text/html');d.querySelectorAll('script,style').forEach(x=>x.remove());return d.body.textContent||''}
 // Rebuild a small HTML allowlist; imported scripts, styles and external URLs
@@ -75,7 +75,7 @@ $('#deleteform').onsubmit=async e=>{
     buttons.forEach(b=>b.disabled=true);$('#deletestatus').textContent='Eliminando…';
     try{
         const result=await api('/api/decks',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
-        selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;
+        selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;reviewHistory=[];
         $('#study').hidden=true;$('#study').innerHTML='';$('#library').hidden=false;
         $('#deleteconfirm').close();
         await load();notice(`Se eliminaron ${result.decks} mazos y ${result.cards} tarjetas.`);
@@ -216,18 +216,32 @@ $('#decks').onclick=async e=>{
         }else startReview(session);
     }catch(e){notice(e.message)}
 };
-function leave(){$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
+function leave(){reviewHistory=[];$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
 function startReview(cards){
-    reviewDeck=[...cards];reviewQueue=shuffled(cards);reviewKnown=0;showReview();
+    reviewDeck=[...cards];reviewQueue=shuffled(cards);reviewKnown=0;reviewHistory=[];showReview();
+}
+function undoReview(){
+    if(exam || $('#study').hidden || !reviewHistory.length)return;
+    const previous=reviewHistory.pop();
+    if(previous.reinsertAt!==null)reviewQueue.splice(previous.reinsertAt,1);
+    reviewQueue.unshift(previous.card);reviewKnown=previous.known;
+    showReview();$('#reveal').click();
+    const flashcard=$('#study .flashcard');flashcard.tabIndex=-1;flashcard.focus({preventScroll:true});
+    notice('Última calificación deshecha. Puedes volver a calificar esta tarjeta.');
+}
+function undoReviewButton(){
+    return `<button id="undoreview" type="button" aria-keyshortcuts="Control+z Meta+z" ${reviewHistory.length?'':'disabled'}>↶ Deshacer calificación · Ctrl + Z</button>`;
 }
 function showReview(){
     if(!reviewQueue.length){
-        $('#study').innerHTML=`<div class="empty"><span>✳</span><h1>¡Ya te las sabes todas!</h1><p>Has marcado las ${reviewDeck.length} tarjetas como Bien o Fácil. Puedes repasar el mazo completo otra vez, sin esperar.</p><button class="primary" id="again">Repasar todo de nuevo</button> <button onclick="leave()">Mis mazos</button></div>`;
+        $('#study').innerHTML=`<div class="empty"><span>✳</span><h1>¡Ya te las sabes todas!</h1><p>Has marcado las ${reviewDeck.length} tarjetas como Bien o Fácil. Puedes repasar el mazo completo otra vez, sin esperar.</p><div class="actions"><button class="primary" id="again">Repasar todo de nuevo</button><button onclick="leave()">Mis mazos</button>${undoReviewButton()}</div></div>`;
+        $('#undoreview').onclick=undoReview;
         $('#again').onclick=()=>startReview(reviewDeck);
         return;
     }
     const c=reviewQueue[0];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Repaso libre</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><button id="editcurrent" type="button">Editar tarjeta</button></div><div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>Repaso libre</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><button id="editcurrent" type="button">Editar tarjeta</button></div><div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
+    $('#undoreview').onclick=undoReview;
     $('#editcurrent').onclick=()=>{
         const wasRevealed=!$('#answer').hidden;
         openCardEditor(c,selected,()=>{showReview();if(wasRevealed)$('#reveal').click();});
@@ -239,10 +253,13 @@ function showReview(){
     $('#ratings').onclick=e=>{
         const button=e.target.closest('button[data-rating]');if(!button || $('#answer').hidden)return;
         const card=reviewQueue.shift(), rating=button.dataset.rating;
+        const previous={card,known:reviewKnown,reinsertAt:null};
         if(rating==='again' || rating==='hard'){
             // Repeat within this session: sooner for Again, later for Hard.
-            reviewQueue.splice(Math.min(rating==='again'?1:3,reviewQueue.length),0,card);
+            previous.reinsertAt=Math.min(rating==='again'?1:3,reviewQueue.length);
+            reviewQueue.splice(previous.reinsertAt,0,card);
         }else reviewKnown++;
+        reviewHistory.push(previous);
         showReview();
     };
 }
@@ -256,6 +273,14 @@ function show(){
         if(index<session.length)show();else results();
     };
 }
+document.addEventListener('keydown',e=>{
+    if(!(e.ctrlKey || e.metaKey) || e.key.toLowerCase()!=='z' || e.shiftKey || e.altKey || e.isComposing)return;
+    if(exam || $('#study').hidden || document.querySelector('dialog[open]'))return;
+    const target=e.target;
+    if(target instanceof Element && (target.closest('input,textarea,select,[role="textbox"]') || target.isContentEditable))return;
+    const button=$('#undoreview');if(!button || button.disabled)return;
+    e.preventDefault();if(!e.repeat)undoReview();
+});
 document.addEventListener('keydown',e=>{
     const space=e.code==='Space' || e.key===' ';
     if(!space && !['1','2','3','4'].includes(e.key)) return;
