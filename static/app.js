@@ -23,6 +23,33 @@ function cardHtml(markup){
     }
     const output=document.createElement('div');for(const child of parsed.body.childNodes)output.append(clean(child));return output.innerHTML;
 }
+// A transient image request should not leave only a broken-image label.
+// Retry once, then offer an explicit retry without altering card content.
+document.addEventListener('load',e=>{
+    if(e.target instanceof HTMLImageElement)delete e.target.dataset.retried;
+},true);
+document.addEventListener('error',e=>{
+    const img=e.target;
+    if(!(img instanceof HTMLImageElement) || !img.closest('.flashcard,.browse-card,.result,.edit-images'))return;
+    const path=new URL(img.src,location.href).pathname;
+    if(!/^\/media\/[a-f0-9]{32}$/.test(path))return;
+    if(!img.dataset.retried){
+        img.dataset.retried='1';
+        setTimeout(()=>{if(img.isConnected)img.src=path+'?retry=1';},350);
+        return;
+    }
+    if(img.nextElementSibling?.classList.contains('image-error'))return;
+    img.hidden=true;
+    const message=document.createElement('span');message.className='image-error';message.setAttribute('role','status');
+    message.append(document.createTextNode('No se pudo cargar esta imagen. '));
+    const retry=document.createElement('button');retry.type='button';retry.textContent='Reintentar imagen';
+    retry.onclick=()=>{
+        message.remove();img.hidden=false;delete img.dataset.retried;
+        img.src=path+'?retry='+Date.now();
+    };
+    message.append(retry);img.after(message);
+    img.addEventListener('load',()=>{message.remove();img.hidden=false;},{once:true});
+},true);
 function cardImages(markup){
     const container=document.createElement('div');container.innerHTML=cardHtml(markup);
     return [...container.querySelectorAll('img')].map(img=>img.outerHTML).join('');
@@ -89,7 +116,7 @@ $('#addform').addEventListener('input',e=>{
 });
 $('#add').addEventListener('close',()=>{$('#cardstatus').textContent='';});
 $('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormData();form.append('file',e.target.files[0]);notice('Importando…');try{const r=await api('/api/import',{method:'POST',body:form});notice(`${r.count} tarjetas importadas en ${r.decks} mazos. ${r.warning}`);load()}catch(e){notice(e.message)}e.target.value=''};
-let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=false;
+let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=false,editingDeck=null,afterCardEdit=null;
 const pageSize=25;
 async function openBrowser(deck,name){
     try{
@@ -102,13 +129,8 @@ async function openBrowser(deck,name){
         $('#browsenext').onclick=()=>{browsePage++;renderBrowser();};
         $('#cardlist').onclick=e=>{
             const b=e.target.closest('button[data-edit]');if(!b)return;
-            editingCard=browseCards.find(c=>c.id===b.dataset.edit);if(!editingCard)return;
-            const form=$('#editform');form.elements.front.value=plain(editingCard.front);form.elements.back.value=plain(editingCard.back);
-            for(const name of ['front','back'])form.elements[name].required=!cardImages(editingCard[name]);
-            $('#editimages').innerHTML=cardImages(editingCard.front)+cardImages(editingCard.back);
-            $('#editimages').hidden=!$('#editimages').innerHTML;
-            form.elements.front.setCustomValidity('');form.elements.back.setCustomValidity('');
-            $('#editstatus').textContent='';$('#edit').showModal();
+            const card=browseCards.find(c=>c.id===b.dataset.edit);if(!card)return;
+            openCardEditor(card,browseDeck,renderBrowser);
         };
         renderBrowser();
     }catch(error){notice(error.message);}
@@ -121,6 +143,16 @@ function renderBrowser(){
     $('#cardlist').innerHTML=filtered.slice(browsePage*pageSize,(browsePage+1)*pageSize).map(c=>`<article class="browse-card"><div><div class="browse-front">${cardHtml(c.front)}</div><div class="browse-back"><strong>Respuesta:</strong> ${cardHtml(c.back)}</div></div><button data-edit="${esc(c.id)}">Editar</button></article>`).join('') || '<p class="empty">No hay tarjetas que mostrar.</p>';
     $('#browsepage').textContent=`Página ${browsePage+1} de ${pages}`;
     $('#browseprev').disabled=browsePage===0;$('#browsenext').disabled=browsePage>=pages-1;
+}
+function openCardEditor(card,deck,onSaved){
+    editingCard=card;editingDeck=deck;afterCardEdit=onSaved;
+    const form=$('#editform');form.elements.front.value=plain(card.front);form.elements.back.value=plain(card.back);
+    for(const name of ['front','back']){
+        form.elements[name].required=!cardImages(card[name]);form.elements[name].setCustomValidity('');
+    }
+    $('#editimages').innerHTML=cardImages(card.front)+cardImages(card.back);
+    $('#editimages').hidden=!$('#editimages').innerHTML;
+    $('#editstatus').textContent='';$('#edit').showModal();
 }
 $('#canceledit').onclick=()=>$('#edit').close();
 $('#edit').addEventListener('cancel',e=>{if(savingEdit)e.preventDefault();});
@@ -138,8 +170,8 @@ $('#editform').onsubmit=async e=>{
     for(const name of ['front','back'])body[name]=editedCardSide(card[name],form.elements[name].value);
     savingEdit=true;form.querySelectorAll('button').forEach(b=>b.disabled=true);$('#editstatus').textContent='Guardando…';
     try{
-        await api(`/api/decks/${browseDeck}/cards/${card.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        Object.assign(card,body);$('#edit').close();renderBrowser();notice('Cambios guardados.');
+        await api(`/api/decks/${editingDeck}/cards/${card.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        Object.assign(card,body);$('#edit').close();if(afterCardEdit)afterCardEdit();notice('Cambios guardados.');
     }catch(error){$('#editstatus').textContent=error.message;}
     finally{savingEdit=false;form.querySelectorAll('button').forEach(b=>b.disabled=false);}
 };
@@ -195,7 +227,11 @@ function showReview(){
         return;
     }
     const c=reviewQueue[0];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Repaso libre</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Repaso libre</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><button id="editcurrent" type="button">Editar tarjeta</button></div><div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
+    $('#editcurrent').onclick=()=>{
+        const wasRevealed=!$('#answer').hidden;
+        openCardEditor(c,selected,()=>{showReview();if(wasRevealed)$('#reveal').click();});
+    };
     $('#reveal').onclick=()=>{
         $('#answer').hidden=false;$('#ratings').hidden=false;$('#reveal').hidden=true;
         $('#reviewhint').textContent='1: Otra vez · 2: Difícil · 3: Bien · 4: Fácil · Espacio: Bien.';
