@@ -1,6 +1,37 @@
 const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown;
 function esc(s){const e=document.createElement('div');e.textContent=s;return e.innerHTML}
 function plain(s){const d=new DOMParser().parseFromString(s,'text/html');d.querySelectorAll('script,style').forEach(x=>x.remove());return d.body.textContent||''}
+// Rebuild a small HTML allowlist; imported scripts, styles and external URLs
+// never enter the live document.
+function cardHtml(markup){
+    const parsed=new DOMParser().parseFromString(markup,'text/html');
+    const allowed=new Set(['DIV','P','SPAN','BR','HR','B','STRONG','I','EM','U','S','SUB','SUP','UL','OL','LI','TABLE','THEAD','TBODY','TR','TD','TH','H1','H2','H3','H4','BLOCKQUOTE','PRE','CODE']);
+    function clean(node){
+        if(node.nodeType===Node.TEXT_NODE)return document.createTextNode(node.textContent);
+        const fragment=document.createDocumentFragment();
+        if(node.nodeType!==Node.ELEMENT_NODE)return fragment;
+        if(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','SVG','MATH','TEMPLATE','LINK','META'].includes(node.tagName))return fragment;
+        if(node.tagName==='IMG'){
+            const src=node.getAttribute('src')||'';
+            if(!/^\/media\/[a-f0-9]{32}$/.test(src))return document.createTextNode('[Imagen no disponible: vuelve a importar el mazo con sus archivos multimedia]');
+            const img=document.createElement('img');img.setAttribute('src',src);img.alt=node.getAttribute('alt')||'Imagen de la tarjeta';img.loading='lazy';return img;
+        }
+        const result=allowed.has(node.tagName)?document.createElement(node.tagName.toLowerCase()):fragment;
+        if(node.classList.contains('cloze') && result.nodeType===Node.ELEMENT_NODE)result.className='cloze';
+        for(const child of node.childNodes)result.append(clean(child));
+        return result;
+    }
+    const output=document.createElement('div');for(const child of parsed.body.childNodes)output.append(clean(child));return output.innerHTML;
+}
+function cardImages(markup){
+    const container=document.createElement('div');container.innerHTML=cardHtml(markup);
+    return [...container.querySelectorAll('img')].map(img=>img.outerHTML).join('');
+}
+function hasCardContent(markup){return Boolean(plain(markup).trim() || cardImages(markup));}
+function editedCardSide(original,text){
+    if(text===plain(original))return original;
+    return esc(text.trim()).replace(/\n/g,'<br>')+cardImages(original);
+}
 async function api(url,options){const r=await fetch(url,options);const d=await r.json();if(!r.ok)throw Error(d.error||'No se pudo completar la operación.');return d}
 function notice(s){$('#notice').textContent=s}
 async function load(){try{const decks=await api('/api/decks');$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p><div class="deck-actions"><button data-id="${d.id}" data-action="review">Repasar ↗</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
@@ -73,6 +104,9 @@ async function openBrowser(deck,name){
             const b=e.target.closest('button[data-edit]');if(!b)return;
             editingCard=browseCards.find(c=>c.id===b.dataset.edit);if(!editingCard)return;
             const form=$('#editform');form.elements.front.value=plain(editingCard.front);form.elements.back.value=plain(editingCard.back);
+            for(const name of ['front','back'])form.elements[name].required=!cardImages(editingCard[name]);
+            $('#editimages').innerHTML=cardImages(editingCard.front)+cardImages(editingCard.back);
+            $('#editimages').hidden=!$('#editimages').innerHTML;
             form.elements.front.setCustomValidity('');form.elements.back.setCustomValidity('');
             $('#editstatus').textContent='';$('#edit').showModal();
         };
@@ -84,7 +118,7 @@ function renderBrowser(){
     const filtered=browseCards.filter(c=>plain(c.front).toLocaleLowerCase('es').includes(search) || plain(c.back).toLocaleLowerCase('es').includes(search));
     const pages=Math.max(1,Math.ceil(filtered.length/pageSize));browsePage=Math.min(Math.max(0,browsePage),pages-1);
     $('#browsecount').textContent=`${filtered.length} de ${browseCards.length} tarjetas`;
-    $('#cardlist').innerHTML=filtered.slice(browsePage*pageSize,(browsePage+1)*pageSize).map(c=>`<article class="browse-card"><div><h3>${esc(plain(c.front).slice(0,220))}</h3><p><strong>Respuesta:</strong> ${esc(plain(c.back).slice(0,220))}</p></div><button data-edit="${esc(c.id)}">Editar</button></article>`).join('') || '<p class="empty">No hay tarjetas que mostrar.</p>';
+    $('#cardlist').innerHTML=filtered.slice(browsePage*pageSize,(browsePage+1)*pageSize).map(c=>`<article class="browse-card"><div><div class="browse-front">${cardHtml(c.front)}</div><div class="browse-back"><strong>Respuesta:</strong> ${cardHtml(c.back)}</div></div><button data-edit="${esc(c.id)}">Editar</button></article>`).join('') || '<p class="empty">No hay tarjetas que mostrar.</p>';
     $('#browsepage').textContent=`Página ${browsePage+1} de ${pages}`;
     $('#browseprev').disabled=browsePage===0;$('#browsenext').disabled=browsePage>=pages-1;
 }
@@ -98,10 +132,10 @@ $('#editform').onsubmit=async e=>{
     e.preventDefault();if(savingEdit || !editingCard)return;
     const form=e.currentTarget, card=editingCard;
     for(const name of ['front','back']){
-        if(!form.elements[name].value.trim()){form.elements[name].setCustomValidity('Completa este campo.');form.elements[name].reportValidity();return;}
+        if(!form.elements[name].value.trim() && !cardImages(card[name])){form.elements[name].setCustomValidity('Completa este campo.');form.elements[name].reportValidity();return;}
     }
     const body={};
-    for(const name of ['front','back'])body[name]=form.elements[name].value===plain(card[name])?card[name]:form.elements[name].value.trim();
+    for(const name of ['front','back'])body[name]=editedCardSide(card[name],form.elements[name].value);
     savingEdit=true;form.querySelectorAll('button').forEach(b=>b.disabled=true);$('#editstatus').textContent='Guardando…';
     try{
         await api(`/api/decks/${browseDeck}/cards/${card.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -114,8 +148,11 @@ function shuffled(items){
     for(let i=result.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[result[i],result[j]]=[result[j],result[i]];}
     return result;
 }
-function answerText(card){return plain(card.back).trim();}
-function answerKey(text){return text.replace(/\s+/g,' ').trim().toLocaleLowerCase('es');}
+function answerText(card){return cardHtml(card.back).trim();}
+function answerKey(text){
+    const holder=document.createElement('div');holder.innerHTML=cardImages(text);
+    return plain(text).replace(/\s+/g,' ').trim().toLocaleLowerCase('es')+'|'+[...holder.querySelectorAll('img')].map(img=>img.getAttribute('src')).join('|');
+}
 function choicesFor(card){
     const correct=answerText(card), key=answerKey(correct);
     const distractors=shuffled(examPool.filter(text=>answerKey(text)!==key)).slice(0,3);
@@ -130,7 +167,7 @@ $('#decks').onclick=async e=>{
         if(!session.length)return notice('Añade tarjetas a este mazo para empezar.');
         exam=b.dataset.action==='exam';index=0;answers=[];
         if(exam){
-            session=session.filter(c=>plain(c.front).trim() && answerText(c));
+            session=session.filter(c=>hasCardContent(c.front) && hasCardContent(c.back));
             const unique=new Map();
             session.forEach(c=>unique.set(answerKey(answerText(c)),answerText(c)));
             examPool=[...unique.values()];
@@ -158,7 +195,7 @@ function showReview(){
         return;
     }
     const c=reviewQueue[0];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Repaso libre</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><h2>${esc(plain(c.front))}</h2><div id="answer" hidden><hr><p>${esc(plain(c.back))}</p></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Repaso libre</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
     $('#reveal').onclick=()=>{
         $('#answer').hidden=false;$('#ratings').hidden=false;$('#reveal').hidden=true;
         $('#reviewhint').textContent='1: Otra vez · 2: Difícil · 3: Bien · 4: Fácil · Espacio: Bien.';
@@ -175,7 +212,7 @@ function showReview(){
 }
 function show(){
     const c=session[index];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Simulacro</h2><span>${index+1} / ${session.length}</span></div><progress value="${index}" max="${session.length}"></progress><div class="flashcard"><span class="eyebrow">MARCA UNA ALTERNATIVA</span><h2>${esc(plain(c.front))}</h2><fieldset class="choices"><legend>Elige tu respuesta</legend>${c.choices.map((text,i)=>`<label class="choice"><input type="radio" name="choice" value="${i}"><span class="choice-letter">${'ABCD'[i]}</span><span>${esc(text)}</span></label>`).join('')}</fieldset></div><div class="actions"><button class="primary" id="next" aria-keyshortcuts="Space" disabled>${index===session.length-1?'Terminar y ver resultados':'Siguiente pregunta →'}</button></div><p class="hint">Marca una alternativa y pulsa Espacio para continuar.</p>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Simulacro</h2><span>${index+1} / ${session.length}</span></div><progress value="${index}" max="${session.length}"></progress><div class="flashcard"><span class="eyebrow">MARCA UNA ALTERNATIVA</span><div class="card-front">${cardHtml(c.front)}</div><fieldset class="choices"><legend>Elige tu respuesta</legend>${c.choices.map((text,i)=>`<label class="choice"><input type="radio" name="choice" value="${i}"><span class="choice-letter">${'ABCD'[i]}</span><span class="choice-content">${cardHtml(text)}</span></label>`).join('')}</fieldset></div><div class="actions"><button class="primary" id="next" aria-keyshortcuts="Space" disabled>${index===session.length-1?'Terminar y ver resultados':'Siguiente pregunta →'}</button></div><p class="hint">Marca una alternativa y pulsa Espacio para continuar.</p>`;
     document.querySelectorAll('input[name="choice"]').forEach(r=>r.onchange=()=>{$('#next').disabled=false;});
     $('#next').onclick=()=>{
         const marked=$('input[name="choice"]:checked');if(!marked)return;
@@ -223,7 +260,7 @@ function results(){
     const correct=session.filter((c,i)=>answerKey(c.choices[answers[i]])===answerKey(answerText(c))).length;
     $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>El botín de tu aventura.</h1><p>Simulacro corregido. Estas son tus respuestas y las claves correctas.</p><h2 id="score">${correct} / ${session.length} correctas · ${Math.round(correct/session.length*100)}%</h2>${session.map((c,i)=>{
         const marked=answers[i],right=c.choices.findIndex(text=>answerKey(text)===answerKey(answerText(c))),ok=marked===right;
-        return `<article class="result ${ok?'result-correct':'result-wrong'}"><span class="result-verdict">${ok?'✓ Correcta':'✕ Incorrecta'}</span><h3>${i+1}. ${esc(plain(c.front))}</h3><p><strong>Tu respuesta (${'ABCD'[marked]}):</strong> ${esc(c.choices[marked])}</p><p><strong>Clave correcta (${'ABCD'[right]}):</strong> ${esc(c.choices[right])}</p></article>`;
+        return `<article class="result ${ok?'result-correct':'result-wrong'}"><span class="result-verdict">${ok?'✓ Correcta':'✕ Incorrecta'}</span><div class="result-question"><strong>${i+1}.</strong> ${cardHtml(c.front)}</div><div><strong>Tu respuesta (${'ABCD'[marked]}):</strong> ${cardHtml(c.choices[marked])}</div><div><strong>Clave correcta (${'ABCD'[right]}):</strong> ${cardHtml(c.choices[right])}</div></article>`;
     }).join('')}<button onclick="leave()">Volver a mis mazos</button>`;
 }
 load();

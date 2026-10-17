@@ -5,6 +5,7 @@ import zstandard
 import hmac
 from anki.collection import Collection
 from anki.errors import AnkiException
+from anki_media import unpack, read_images, rewrite_images
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 128 * 1024 * 1024
@@ -35,7 +36,7 @@ def db():
     return c
 
 with db() as c:
-    c.executescript('CREATE TABLE IF NOT EXISTS decks(id TEXT PRIMARY KEY,name TEXT); CREATE TABLE IF NOT EXISTS cards(id TEXT PRIMARY KEY,deck TEXT,front TEXT,back TEXT);')
+    c.executescript('CREATE TABLE IF NOT EXISTS media(id TEXT PRIMARY KEY,mime TEXT,content BLOB); CREATE TABLE IF NOT EXISTS decks(id TEXT PRIMARY KEY,name TEXT); CREATE TABLE IF NOT EXISTS cards(id TEXT PRIMARY KEY,deck TEXT,front TEXT,back TEXT);')
 
 @app.get('/')
 def home(): return render_template('index.html')
@@ -62,6 +63,7 @@ def delete_all_decks():
     with db() as c:
         cards=c.execute('DELETE FROM cards').rowcount
         decks=c.execute('DELETE FROM decks').rowcount
+        c.execute('DELETE FROM media')
     return jsonify(decks=decks,cards=cards)
 
 @app.post('/api/decks/<key>/cards')
@@ -92,13 +94,6 @@ def edit_card(key,card_id):
                           (front.strip(),back.strip(),card_id,key)).rowcount
         if not updated: return jsonify(error='La tarjeta ya no existe en este mazo.'),404
     return jsonify(ok=True)
-
-def unpack(raw):
-    if raw.startswith(b'\x28\xb5\x2f\xfd'):
-        with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(raw)) as reader:
-            raw = reader.read(256*1024*1024+1)
-        if len(raw)>256*1024*1024: raise ValueError('Archivo descomprimido demasiado grande.')
-    return raw
 
 def render(template, fields, answer=False):
     template = re.sub(r'{{FrontSide}}', '', template)
@@ -148,6 +143,16 @@ def collection_cards(path):
         return result
     finally: collection.close()
 
+@app.get('/media/<token>')
+def card_image(token):
+    if not re.fullmatch(r'[0-9a-f]{32}',token): return '',404
+    with db() as c: asset=c.execute('SELECT mime,content FROM media WHERE id=?',(token,)).fetchone()
+    if not asset:return '',404
+    response=send_file(io.BytesIO(asset['content']),mimetype=asset['mime'],max_age=0)
+    response.headers['X-Content-Type-Options']='nosniff'
+    response.headers['Cache-Control']='private, no-store'
+    return response
+
 @app.post('/api/import')
 def import_deck():
     upload=request.files.get('file')
@@ -165,15 +170,22 @@ def import_deck():
             with tempfile.TemporaryDirectory() as tmp:
                 path=Path(tmp)/'collection.anki2';path.write_bytes(raw)
                 rows=collection_cards(path)
-        pending=[];imported={};batch=uuid.uuid4().hex
+            names,assets=read_images(archive,candidates[0]=='collection.anki21b')
+        pending=[];imported={};batch=uuid.uuid4().hex;missing=0
         for did,name,front,back in rows:
+            front,front_missing=rewrite_images(front,names)
+            back,back_missing=rewrite_images(back,names)
+            missing+=front_missing+back_missing
             key=batch+'-'+str(did);imported[key]=name
             pending.append((uuid.uuid4().hex,key,front,back))
         if not pending: raise ValueError('El paquete no contiene tarjetas.')
         with db() as c:
+            c.executemany('INSERT INTO media VALUES (?,?,?)',assets)
             c.executemany('INSERT INTO decks VALUES (?,?)',imported.items())
             c.executemany('INSERT INTO cards VALUES (?,?,?,?)',pending)
-        return jsonify(count=len(pending),decks=len(imported),warning='Se importó el texto. Las imágenes, audio y estilos de Anki todavía no se importan.')
+        warning='Se importaron las tarjetas y sus imágenes. El audio y los estilos personalizados aún no se admiten.'
+        if missing:warning+=f' {missing} referencias a imágenes no estaban incluidas o usan un formato no compatible.'
+        return jsonify(count=len(pending),decks=len(imported),images=len(assets),warning=warning)
     except (ValueError,KeyError,IndexError,TypeError,sqlite3.Error,zipfile.BadZipFile,
             RuntimeError,OSError,EOFError,zstandard.ZstdError,AnkiException) as e:
         message=str(e) if isinstance(e,ValueError) and not isinstance(e,json.JSONDecodeError) else 'No se pudo leer la colección. El archivo puede estar dañado o usar un formato aún no compatible.'
