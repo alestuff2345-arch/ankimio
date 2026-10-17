@@ -175,7 +175,7 @@ function showReview(){
 }
 function show(){
     const c=session[index];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Simulacro</h2><span>${index+1} / ${session.length}</span></div><progress value="${index}" max="${session.length}"></progress><div class="flashcard"><span class="eyebrow">MARCA UNA ALTERNATIVA</span><h2>${esc(plain(c.front))}</h2><fieldset class="choices"><legend>Elige tu respuesta</legend>${c.choices.map((text,i)=>`<label class="choice"><input type="radio" name="choice" value="${i}"><span class="choice-letter">${'ABCD'[i]}</span><span>${esc(text)}</span></label>`).join('')}</fieldset></div><div class="actions"><button class="primary" id="next" disabled>${index===session.length-1?'Terminar y ver resultados':'Siguiente pregunta →'}</button></div>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><div class="section-title"><h2>Simulacro</h2><span>${index+1} / ${session.length}</span></div><progress value="${index}" max="${session.length}"></progress><div class="flashcard"><span class="eyebrow">MARCA UNA ALTERNATIVA</span><h2>${esc(plain(c.front))}</h2><fieldset class="choices"><legend>Elige tu respuesta</legend>${c.choices.map((text,i)=>`<label class="choice"><input type="radio" name="choice" value="${i}"><span class="choice-letter">${'ABCD'[i]}</span><span>${esc(text)}</span></label>`).join('')}</fieldset></div><div class="actions"><button class="primary" id="next" aria-keyshortcuts="Space" disabled>${index===session.length-1?'Terminar y ver resultados':'Siguiente pregunta →'}</button></div><p class="hint">Marca una alternativa y pulsa Espacio para continuar.</p>`;
     document.querySelectorAll('input[name="choice"]').forEach(r=>r.onchange=()=>{$('#next').disabled=false;});
     $('#next').onclick=()=>{
         const marked=$('input[name="choice"]:checked');if(!marked)return;
@@ -187,8 +187,20 @@ document.addEventListener('keydown',e=>{
     const space=e.code==='Space' || e.key===' ';
     if(!space && !['1','2','3','4'].includes(e.key)) return;
     if(e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || e.isComposing) return;
-    if(exam || $('#study').hidden || document.querySelector('dialog[open]')) return;
+    if($('#study').hidden || document.querySelector('dialog[open]')) return;
     const target=e.target;
+    if(exam){
+        if(!space)return;
+        const next=$('#next');
+        if(!next || next.disabled || !$('input[name="choice"]:checked'))return;
+        if(target instanceof Element){
+            if(target.isContentEditable || target.closest('textarea,select,a,[role="textbox"]'))return;
+            const input=target.closest('input');
+            if(input && !input.matches('input[type="radio"][name="choice"]'))return;
+            const button=target.closest('button');if(button && button!==next)return;
+        }
+        e.preventDefault();if(!e.repeat)next.click();return;
+    }
     if(target instanceof Element && (target.closest('input,textarea,select,a,[role="textbox"]') || target.isContentEditable)) return;
     const reveal=$('#reveal'), ratings=$('#ratings');
     if(!reveal || !ratings)return;
