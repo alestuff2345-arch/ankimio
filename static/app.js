@@ -137,7 +137,7 @@ async function deckCards(key){
     return bundle.cards;
 }
 function notice(s){$('#notice').textContent=s}
-async function load(){try{const decks=await api('/api/decks?'+timezoneQuery);$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p>${deckProgressHtml(d)}<div class="deck-actions"><button data-id="${d.id}" data-action="review">${spacedEnabled?'Repasar todo ↗':'Repasar ↗'}</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
+async function load(){try{const decks=await api('/api/decks?'+timezoneQuery);$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['◈','✦','◉','⬡'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p>${deckProgressHtml(d)}<div class="deck-actions"><button data-id="${d.id}" data-action="review">${spacedEnabled?'Repasar todo ↗':'Repasar ↗'}</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>Tu próxima idea empieza aquí.</h3><p>Crea un mazo o importa tus tarjetas de Anki para empezar.</p></div>'}catch(e){notice(e.message)}}
 $('#deleteall').onclick=()=>{
     $('#deletestatus').textContent='';$('#deleteconfirm').showModal();
 };
@@ -300,7 +300,7 @@ $('#decks').onclick=async e=>{
         }
         $('#library').hidden=true;$('#study').hidden=false;notice('');
         if(exam){
-            $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>Tu prueba en el Grand Line.</h1><p>Marca una alternativa por pregunta. Recibirás tu nota y las claves al terminar, sin límite de tiempo.</p><p class="hint">Hasta 4 alternativas, usando respuestas de otras tarjetas del mazo. Revisa que tus preguntas tengan una única respuesta válida.</p><form id="config"><label>Número de preguntas<input id="amount" type="number" min="1" max="${session.length}" value="${Math.min(20,session.length)}" required></label><button class="primary">Comenzar simulacro</button></form>`;
+            $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>Pon a prueba lo que sabes.</h1><p>Marca una alternativa por pregunta. Recibirás tu nota y las claves al terminar, sin límite de tiempo.</p><p class="hint">Hasta 4 alternativas, usando respuestas de otras tarjetas del mazo. Revisa que tus preguntas tengan una única respuesta válida.</p><form id="config"><label>Número de preguntas<input id="amount" type="number" min="1" max="${session.length}" value="${Math.min(20,session.length)}" required></label><button class="primary">Comenzar simulacro</button></form>`;
             $('#config').onsubmit=e=>{
                 e.preventDefault();
                 session=session.slice(0,Number($('#amount').value)).map(c=>({...c,choices:choicesFor(c)}));show();
@@ -480,7 +480,7 @@ document.addEventListener('keydown',e=>{
 });
 function results(){
     const correct=session.filter((c,i)=>answerKey(c.choices[answers[i]])===answerKey(answerText(c))).length;
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>El botín de tu aventura.</h1><p>Simulacro corregido. Estas son tus respuestas y las claves correctas.</p><h2 id="score">${correct} / ${session.length} correctas · ${Math.round(correct/session.length*100)}%</h2>${session.map((c,i)=>{
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>Tus resultados.</h1><p>Simulacro corregido. Estas son tus respuestas y las claves correctas.</p><h2 id="score">${correct} / ${session.length} correctas · ${Math.round(correct/session.length*100)}%</h2>${session.map((c,i)=>{
         const marked=answers[i],right=c.choices.findIndex(text=>answerKey(text)===answerKey(answerText(c))),ok=marked===right;
         return `<article class="result ${ok?'result-correct':'result-wrong'}"><span class="result-verdict">${ok?'✓ Correcta':'✕ Incorrecta'}</span><div class="result-question"><strong>${i+1}.</strong> ${cardHtml(c.front)}</div><div><strong>Tu respuesta (${'ABCD'[marked]}):</strong> ${cardHtml(c.choices[marked])}</div><div><strong>Clave correcta (${'ABCD'[right]}):</strong> ${cardHtml(c.choices[right])}</div></article>`;
     }).join('')}<button onclick="leave()">Volver a mis mazos</button>`;

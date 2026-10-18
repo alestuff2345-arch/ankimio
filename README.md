@@ -1,5 +1,5 @@
 # Ankimio
-Aplicación personal en español con temática de One Piece para crear e importar mazos, repasar sin límites de tiempo y hacer simulacros.
+Aplicación personal en español con tema Noche, fondo oscuro y acentos violetas para crear e importar mazos, repasar sin límites de tiempo y hacer simulacros.
 
 ## Datos permanentes en Render y Supabase
 En producción, **mazos, tarjetas, ediciones e imágenes se guardan en PostgreSQL** mediante `DATABASE_URL`. Se usa el esquema `ankimio`, separado del esquema público de Supabase. Render puede reiniciarse sin eliminar esos datos. Esto requiere que la base externa esté configurada y disponible; el código por sí solo no crea una cuenta ni un proyecto de Supabase.
