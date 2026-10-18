@@ -13,7 +13,7 @@ La aplicación rechaza iniciar con almacenamiento temporal cuando está en Rende
 4. Guardar las variables y desplegar la rama `main`. El archivo `render.yaml` declara `DATABASE_URL` como valor que el usuario debe proporcionar; no incluye credenciales.
 5. Comprobar que el despliegue esté **Live**, importar un mazo, editar una tarjeta y comprobar que los datos siguen disponibles tras reiniciar el servicio.
 
-Las conexiones remotas usan TLS con verificación completa del certificado y del hostname. Por defecto se usa el almacén de certificados del sistema; si el proveedor requiere una CA adicional, configurar su ruta mediante `sslrootcert` en la conexión. No desactivar la verificación TLS. La conexión tiene límite de espera y las consultas tienen límites de duración y bloqueo.
+Las conexiones remotas usan TLS con verificación completa del certificado y del hostname. Por defecto se pasa explícitamente el archivo de certificados del sistema, evitando diferencias de rutas con el OpenSSL incluido en psycopg-binary. Si el proveedor requiere otra CA, configurar su ruta con `DATABASE_SSLROOTCERT` o `sslrootcert` en la conexión. No desactivar la verificación TLS. La conexión tiene límite de espera y las consultas tienen límites de duración y bloqueo.
 
 El servicio web gratuito puede dormirse y tardar en despertar. Los límites, capacidad y políticas de inactividad de Supabase dependen de su plan; guardar las imágenes en la base también consume su almacenamiento. Conservar los archivos originales de Anki como respaldo. Esta configuración es un espacio personal protegido por una contraseña, no un sistema de cuentas independientes.
 
@@ -72,3 +72,9 @@ Este servidor Flask necesita un alojamiento Python. Netlify puede servir una int
 
 ### Si Render no conecta con Supabase
 Los errores de inicio muestran un diagnóstico seguro: `PG_NETWORK` (conectividad, proyecto activo y pooler IPv4), `PG_AUTH` (contraseña de la base), `PG_USER` (usuario completo del pooler), `PG_DNS` (hostname), `PG_TLS` (certificado/TLS), `PG_PERMISSIONS` (permisos), o `PG_POOLER` (parámetros no aceptados). No se imprimen las credenciales del controlador. Los límites de consulta y el esquema se configuran mediante `SET LOCAL` después de conectar, en lugar de parámetros de inicio que algunos poolers rechazan.
+
+
+### Certificado CA de Supabase en Render
+Si el diagnóstico es `PG_TLS_TRUST`, descargar el certificado CA desde la configuración SSL de la base de datos de Supabase. En Render → Environment → Secret Files, añadir el certificado como `supabase-ca.crt` y configurar `DATABASE_SSLROOTCERT=/etc/secrets/supabase-ca.crt`. El archivo debe contener el certificado CA público en PEM, no una clave privada. No poner esta ruta al final de `DATABASE_URL` sin codificarla; la variable independiente evita ese problema. Guardar y volver a desplegar.
+
+`PG_TLS_CA_FILE` indica que el archivo CA no existe o no se puede cargar; `PG_TLS_HOST` indica que el certificado no coincide con el hostname. La verificación completa sigue activada: no se recurre a `sslmode=disable` ni a aceptar certificados sin verificar.

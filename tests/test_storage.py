@@ -21,9 +21,30 @@ class StorageConfiguration(unittest.TestCase):
         with patch.dict(os.environ,{'DATABASE_URL':'postgresql://example:fake@pooler.example.com/postgres?sslmode=disable'}):
             options=postgres_options()
             self.assertEqual(options['sslmode'],'verify-full')
-            self.assertEqual(options['sslrootcert'],'system')
+            self.assertTrue(__import__('pathlib').Path(options['sslrootcert']).is_file())
+            self.assertNotEqual(options['sslrootcert'],'system')
             self.assertEqual(options['connect_timeout'],'10')
             self.assertNotIn('options',options)
+
+    def test_explicit_ca_file_is_used_without_disabling_verification(self):
+        import ssl
+        from pathlib import Path
+        ca=ssl.get_default_verify_paths().cafile
+        with patch.dict(os.environ,{'DATABASE_URL':'postgresql://example:fake@pooler.example.com/postgres?sslmode=disable','DATABASE_SSLROOTCERT':ca}):
+            options=postgres_options()
+            self.assertEqual(options['sslrootcert'],ca)
+            self.assertEqual(options['sslmode'],'verify-full')
+
+    def test_missing_or_invalid_ca_is_reported_without_echoing_path(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'private-example.pem'
+            with patch.dict(os.environ,{'DATABASE_URL':'postgresql://example:fake@pooler.example.com/postgres','DATABASE_SSLROOTCERT':str(path)}):
+                for write in (False,True):
+                    if write:path.write_text('not a certificate')
+                    with self.assertRaisesRegex(RuntimeError,'PG_TLS_CA_FILE') as error:postgres_options()
+                    self.assertNotIn('private-example',str(error.exception))
 
     def test_invalid_connection_string_does_not_echo_credentials(self):
         with patch.dict(os.environ,{'DATABASE_URL':'bad-not-a-dsn-fake-password'}):
@@ -50,7 +71,9 @@ class StorageConfiguration(unittest.TestCase):
             ('Tenant or user not found secret-password','PG_USER'),
             ('connection timeout expired secret-password','PG_NETWORK'),
             ('could not translate host name secret-password','PG_DNS'),
-            ('SSL certificate verify failed secret-password','PG_TLS'),
+            ('SSL certificate verify failed secret-password','PG_TLS_TRUST'),
+            ('server certificate does not match host name secret-password','PG_TLS_HOST'),
+            ('root certificate file does not exist secret-password','PG_TLS_CA_FILE'),
             ('unsupported startup parameter: options secret-password','PG_POOLER'),
             ('permission denied for schema secret-password','PG_PERMISSIONS'),
             ('unknown secret-password','PG_CONNECTION'),

@@ -1,6 +1,7 @@
 """Persistent PostgreSQL in production, SQLite only for local development."""
 import os
 import sqlite3
+import ssl
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -28,6 +29,24 @@ class PostgresConnection:
 
 def using_postgres(): return bool(os.environ.get('DATABASE_URL','').strip())
 
+def trusted_ca_file(options):
+    configured=os.environ.get('DATABASE_SSLROOTCERT') or options.get('sslrootcert')
+    if configured and configured!='system':
+        candidates=[Path(configured).expanduser()]
+    else:
+        # The OpenSSL shipped inside psycopg-binary may use a different
+        # default certificate location from the host. Pass the actual bundle.
+        system=ssl.get_default_verify_paths().cafile
+        candidates=[Path(system)] if system else []
+        candidates.extend((Path('/etc/ssl/certs/ca-certificates.crt'),Path('/etc/pki/tls/certs/ca-bundle.crt')))
+    for path in candidates:
+        if not path.is_file():continue
+        try:ssl.create_default_context(cafile=str(path))
+        except (ssl.SSLError,OSError):
+            raise RuntimeError('PG_TLS_CA_FILE: el archivo de certificados no es válido. Configura DATABASE_SSLROOTCERT con el certificado CA descargado desde Supabase.') from None
+        return str(path)
+    raise RuntimeError('PG_TLS_CA_FILE: no se encontró el archivo CA. Añade el certificado de Supabase como Secret File y configura su ruta en DATABASE_SSLROOTCERT.')
+
 def postgres_options():
     try:
         options=conninfo_to_dict(os.environ['DATABASE_URL'])
@@ -37,7 +56,7 @@ def postgres_options():
     local=host in ('localhost','127.0.0.1','::1') or host.startswith('/')
     if not local or os.environ.get('RENDER')=='true':
         options['sslmode']='verify-full'
-        options.setdefault('sslrootcert','system')
+        options['sslrootcert']=trusted_ca_file(options)
     options['connect_timeout']='10'
     return options
 
@@ -72,6 +91,12 @@ def database_connection_hint(error):
         return 'PG_AUTH: la contraseña de la base no fue aceptada. Sustituye [YOUR-PASSWORD] y codifica los caracteres especiales de la contraseña en la URI.'
     if 'could not translate host' in detail or 'failed to resolve' in detail or 'name or service not known' in detail:
         return 'PG_DNS: no se encontró el servidor. Vuelve a copiar el hostname de Session pooler, sin espacios ni marcadores pendientes.'
+    if 'does not match host' in detail or 'hostname mismatch' in detail:
+        return 'PG_TLS_HOST: el certificado no corresponde al servidor. Copia el hostname exacto del Session pooler en Connect, sin sustituirlo por una IP.'
+    if 'certificate verify failed' in detail or 'self-signed certificate' in detail or 'unable to get local issuer' in detail:
+        return 'PG_TLS_TRUST: no se pudo verificar la cadena de confianza. Descarga el certificado CA desde la configuración de Supabase y configura su ruta en DATABASE_SSLROOTCERT como Secret File de Render.'
+    if 'root certificate file' in detail or 'system root certificate' in detail:
+        return 'PG_TLS_CA_FILE: el controlador no encontró su archivo CA. Configura DATABASE_SSLROOTCERT con la ruta al certificado de confianza de Supabase.'
     if 'certificate' in detail or 'ssl' in detail or 'tls' in detail:
         return 'PG_TLS: falló la conexión TLS o la verificación del certificado. Usa el Session pooler oficial y su certificado de confianza; no desactives la verificación.'
     if 'timeout' in detail or 'timed out' in detail or 'network is unreachable' in detail or 'connection refused' in detail:
