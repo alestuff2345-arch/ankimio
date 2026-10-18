@@ -47,3 +47,8 @@ Los mazos importados antes de esta función deben importarse de nuevo desde el a
 Si una imagen local falla al cargarse, se reintenta una vez y después se ofrece «Reintentar imagen». Esta recuperación no restaura archivos perdidos por reinicios del alojamiento gratuito; en ese caso hay que reimportar el paquete original.
 
 El editor limita la espera de guardado a 20 segundos. «Dejar de esperar» cancela la espera sin cerrar el editor; ante un error o una respuesta no confirmada conserva los campos y permite reintentar. No asume que cancelar la espera haya cancelado una escritura ya recibida por el servidor. Las conexiones SQLite se cierran al terminar cada operación y los bloqueos se devuelven como errores recuperables.
+
+
+Al abrir un mazo para estudiar o explorar, `/api/decks/<id>/study` entrega sus tarjetas y las imágenes referenciadas en una sola respuesta autenticada. La interfaz crea copias de esas imágenes en memoria y las reutiliza durante la sesión, sin depender de peticiones posteriores a `/media/`. Al editar se guardan siempre referencias duraderas, nunca direcciones temporales del navegador. Las copias se liberan al cargar otro mazo o al eliminar todos los mazos.
+
+Esta copia protege las imágenes de una sesión ya cargada frente a cortes de red o reinicios posteriores; no es almacenamiento permanente, no sobrevive a recargar la página y no permite guardar ediciones sin conexión. Si el servidor gratuito ya perdió la base de datos o los archivos, hay que importar de nuevo el paquete original.

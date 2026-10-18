@@ -44,11 +44,18 @@ class ImageImport(unittest.TestCase):
         urls=[url for card in cards for side in ('front','back') for url in re.findall(r'src="(/media/[a-f0-9]{32})"',card[side])]
         self.assertEqual(len(urls),2)
         self.assertEqual(len(set(urls)),1)
+        bundle=client.get('/api/decks/'+deck['id']+'/study')
+        self.assertEqual(bundle.status_code,200)
+        self.assertEqual(len(bundle.json['cards']),2)
+        self.assertEqual(list(bundle.json['images']),[urls[0]])
+        self.assertEqual(base64.b64decode(bundle.json['images'][urls[0]].split(',',1)[1]),PNG)
+        self.assertEqual(bundle.headers['Cache-Control'],'private, no-store')
         image=client.get(urls[0]);self.assertEqual(image.status_code,200)
         self.assertEqual(image.data,PNG);self.assertEqual(image.mimetype,'image/png')
         self.assertEqual(image.headers['X-Content-Type-Options'],'nosniff')
         with patch.dict(os.environ,{'ANKIMIO_PASSWORD':'test-only'}):
             self.assertEqual(client.get(urls[0]).status_code,401)
+            self.assertEqual(client.get('/api/decks/'+deck['id']+'/study').status_code,401)
         return urls[0]
 
     def test_modern_colpkg_images(self):self.verify_images(self.package())
@@ -75,6 +82,17 @@ class ImageImport(unittest.TestCase):
         self.assertEqual(r.status_code,200)
         self.assertEqual(app.test_client().get(url).status_code,404)
         with db() as c:self.assertEqual(c.execute('SELECT count(*) FROM media').fetchone()[0],0)
+
+    def test_study_bundle_missing_deck_and_no_unrelated_images(self):
+        client=app.test_client()
+        self.assertEqual(client.get('/api/decks/missing/study').status_code,404)
+        self.verify_images(self.package())
+        key=client.post('/api/decks',json={'name':'Solo texto'}).json['id']
+        client.post(f'/api/decks/{key}/cards',json={'front':'Pregunta','back':'Respuesta'})
+        bundle=client.get(f'/api/decks/{key}/study')
+        self.assertEqual(bundle.status_code,200)
+        self.assertEqual(bundle.json['images'],{})
+        self.assertEqual(bundle.json['cards'][0]['front'],'Pregunta')
 
     def test_unsupported_image_reference_is_not_a_filesystem_path(self):
         from anki_media import rewrite_images

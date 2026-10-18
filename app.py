@@ -1,3 +1,4 @@
+import base64
 import io, json, os, random, re, sqlite3, tempfile, uuid, zipfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -90,6 +91,28 @@ def cards(key):
     with db() as c: rows = [dict(r) for r in c.execute('SELECT * FROM cards WHERE deck=?',(key,))]
     random.shuffle(rows)
     return jsonify(rows)
+
+@app.get('/api/decks/<key>/study')
+def study_bundle(key):
+    # Deliver the referenced images in the same response as the cards. Once
+    # loaded, a session no longer depends on later requests to /media/.
+    with db() as c:
+        if not c.execute('SELECT 1 FROM decks WHERE id=?',(key,)).fetchone():
+            return jsonify(error='El mazo ya no está en el servidor. Vuelve a importar el archivo original.'),404
+        rows=[dict(r) for r in c.execute('SELECT * FROM cards WHERE deck=?',(key,))]
+        tokens=set()
+        for card in rows:
+            for side in ('front','back'):tokens.update(re.findall(r'/media/([0-9a-f]{32})',card[side]))
+        images={};tokens=list(tokens)
+        for start in range(0,len(tokens),400):
+            batch=tokens[start:start+400]
+            marks=','.join('?' for _ in batch)
+            for asset in c.execute(f'SELECT id,mime,content FROM media WHERE id IN ({marks})',batch):
+                images['/media/'+asset['id']]='data:'+asset['mime']+';base64,'+base64.b64encode(asset['content']).decode('ascii')
+    random.shuffle(rows)
+    response=jsonify(cards=rows,images=images)
+    response.headers['Cache-Control']='private, no-store'
+    return response
 
 @app.patch('/api/decks/<key>/cards/<card_id>')
 def edit_card(key,card_id):

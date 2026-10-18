@@ -1,27 +1,38 @@
 const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown,reviewHistory=[];
 function esc(s){const e=document.createElement('div');e.textContent=s;return e.innerHTML}
-function plain(s){const d=new DOMParser().parseFromString(s,'text/html');d.querySelectorAll('script,style').forEach(x=>x.remove());return d.body.textContent||''}
+function plain(s){const t=document.createElement('template');t.innerHTML=s;t.content.querySelectorAll('script,style').forEach(x=>x.remove());return t.content.textContent||''}
+const sessionImages=new Map();
+function clearSessionImages(){
+    for(const url of sessionImages.values())URL.revokeObjectURL(url);
+    sessionImages.clear();
+}
 // Rebuild a small HTML allowlist; imported scripts, styles and external URLs
 // never enter the live document.
-function cardHtml(markup){
-    const parsed=new DOMParser().parseFromString(markup,'text/html');
+function cardHtml(markup,useSessionImages=true){
+    const template=document.createElement('template');template.innerHTML=markup;
+    const parsed=template.content.ownerDocument;
     const allowed=new Set(['DIV','P','SPAN','BR','HR','B','STRONG','I','EM','U','S','SUB','SUP','UL','OL','LI','TABLE','THEAD','TBODY','TR','TD','TH','H1','H2','H3','H4','BLOCKQUOTE','PRE','CODE']);
     function clean(node){
-        if(node.nodeType===Node.TEXT_NODE)return document.createTextNode(node.textContent);
-        const fragment=document.createDocumentFragment();
+        if(node.nodeType===Node.TEXT_NODE)return parsed.createTextNode(node.textContent);
+        const fragment=parsed.createDocumentFragment();
         if(node.nodeType!==Node.ELEMENT_NODE)return fragment;
         if(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','SVG','MATH','TEMPLATE','LINK','META'].includes(node.tagName))return fragment;
         if(node.tagName==='IMG'){
             const src=node.getAttribute('src')||'';
-            if(!/^\/media\/[a-f0-9]{32}$/.test(src))return document.createTextNode('[Imagen no disponible: vuelve a importar el mazo con sus archivos multimedia]');
-            const img=document.createElement('img');img.setAttribute('src',src);img.alt=node.getAttribute('alt')||'Imagen de la tarjeta';img.loading='lazy';return img;
+            const saved=node.getAttribute('data-media-src');
+            const ref=/^\/media\/[a-f0-9]{32}$/.test(src)?src:(saved && sessionImages.get(saved)===src?saved:'');
+            if(!/^\/media\/[a-f0-9]{32}$/.test(ref))return parsed.createTextNode('[Imagen no disponible: vuelve a importar el mazo con sus archivos multimedia]');
+            const img=parsed.createElement('img');
+            const cached=useSessionImages && sessionImages.get(ref);
+            img.setAttribute('src',cached || ref);if(cached)img.setAttribute('data-media-src',ref);
+            img.alt=node.getAttribute('alt')||'Imagen de la tarjeta';img.loading='lazy';return img;
         }
-        const result=allowed.has(node.tagName)?document.createElement(node.tagName.toLowerCase()):fragment;
+        const result=allowed.has(node.tagName)?parsed.createElement(node.tagName.toLowerCase()):fragment;
         if(node.classList.contains('cloze') && result.nodeType===Node.ELEMENT_NODE)result.className='cloze';
         for(const child of node.childNodes)result.append(clean(child));
         return result;
     }
-    const output=document.createElement('div');for(const child of parsed.body.childNodes)output.append(clean(child));return output.innerHTML;
+    const output=parsed.createElement('div');for(const child of template.content.childNodes)output.append(clean(child));return output.innerHTML;
 }
 // A transient image request should not leave only a broken-image label.
 // Retry once, then offer an explicit retry without altering card content.
@@ -31,7 +42,7 @@ document.addEventListener('load',e=>{
 document.addEventListener('error',e=>{
     const img=e.target;
     if(!(img instanceof HTMLImageElement) || !img.closest('.flashcard,.browse-card,.result,.edit-images'))return;
-    const path=new URL(img.src,location.href).pathname;
+    const path=img.getAttribute('data-media-src') || new URL(img.src,location.href).pathname;
     if(!/^\/media\/[a-f0-9]{32}$/.test(path))return;
     if(!img.dataset.retried){
         img.dataset.retried='1';
@@ -51,8 +62,8 @@ document.addEventListener('error',e=>{
     img.addEventListener('load',()=>{message.remove();img.hidden=false;},{once:true});
 },true);
 function cardImages(markup){
-    const container=document.createElement('div');container.innerHTML=cardHtml(markup);
-    return [...container.querySelectorAll('img')].map(img=>img.outerHTML).join('');
+    const container=document.createElement('template');container.innerHTML=cardHtml(markup,false);
+    return [...container.content.querySelectorAll('img')].map(img=>img.outerHTML).join('');
 }
 function hasCardContent(markup){return Boolean(plain(markup).trim() || cardImages(markup));}
 function editedCardSide(original,text){
@@ -81,6 +92,21 @@ async function api(url,options={},timeoutMs=30000){
         clearTimeout(timer);options.signal?.removeEventListener('abort',cancel);
     }
 }
+async function deckCards(key){
+    const bundle=await api(`/api/decks/${key}/study`,{},120000);
+    const images=new Map();
+    try{
+        for(const [path,value] of Object.entries(bundle.images || {})){
+            if(!/^\/media\/[a-f0-9]{32}$/.test(path))continue;
+            const match=/^data:(image\/(?:png|jpeg|gif|webp|bmp|avif));base64,([A-Za-z0-9+/=]+)$/.exec(value);
+            if(!match)continue;
+            const bytes=Uint8Array.from(atob(match[2]),c=>c.charCodeAt(0));
+            images.set(path,URL.createObjectURL(new Blob([bytes],{type:match[1]})));
+        }
+    }catch(error){for(const url of images.values())URL.revokeObjectURL(url);throw error;}
+    clearSessionImages();for(const [path,url] of images)sessionImages.set(path,url);
+    return bundle.cards;
+}
 function notice(s){$('#notice').textContent=s}
 async function load(){try{const decks=await api('/api/decks');$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p><div class="deck-actions"><button data-id="${d.id}" data-action="review">Repasar ↗</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
 $('#deleteall').onclick=()=>{
@@ -96,7 +122,7 @@ $('#deleteform').onsubmit=async e=>{
     buttons.forEach(b=>b.disabled=true);$('#deletestatus').textContent='Eliminando…';
     try{
         const result=await api('/api/decks',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
-        selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;reviewHistory=[];
+        clearSessionImages();selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;reviewHistory=[];
         $('#study').hidden=true;$('#study').innerHTML='';$('#library').hidden=false;
         $('#deleteconfirm').close();
         await load();notice(`Se eliminaron ${result.decks} mazos y ${result.cards} tarjetas.`);
@@ -141,7 +167,7 @@ let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=fals
 const pageSize=25;
 async function openBrowser(deck,name){
     try{
-        const cards=await api(`/api/decks/${deck}/cards`);
+        const cards=await deckCards(deck);
         browseDeck=deck;browseCards=cards.sort((a,b)=>plain(a.front).localeCompare(plain(b.front),'es'));browsePage=0;
         $('#library').hidden=true;$('#study').hidden=false;notice('');
         $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>Explorar mazo</h1><h2>${esc(name)}</h2><label>Buscar tarjetas<input type="search" id="cardsearch" placeholder="Buscar en preguntas y respuestas…"></label><p id="browsecount" role="status"></p><div id="cardlist"></div><div class="actions"><button id="browseprev">← Anterior</button><span id="browsepage"></span><button id="browsenext">Siguiente →</button></div>`;
@@ -171,7 +197,7 @@ function openCardEditor(card,deck,onSaved){
     for(const name of ['front','back']){
         form.elements[name].required=!cardImages(card[name]);form.elements[name].setCustomValidity('');
     }
-    $('#editimages').innerHTML=cardImages(card.front)+cardImages(card.back);
+    $('#editimages').innerHTML=cardHtml(cardImages(card.front)+cardImages(card.back));
     $('#editimages').hidden=!$('#editimages').innerHTML;
     $('#editstatus').textContent='';$('#edit').showModal();
 }
@@ -219,8 +245,8 @@ function shuffled(items){
 }
 function answerText(card){return cardHtml(card.back).trim();}
 function answerKey(text){
-    const holder=document.createElement('div');holder.innerHTML=cardImages(text);
-    return plain(text).replace(/\s+/g,' ').trim().toLocaleLowerCase('es')+'|'+[...holder.querySelectorAll('img')].map(img=>img.getAttribute('src')).join('|');
+    const holder=document.createElement('template');holder.innerHTML=cardImages(text);
+    return plain(text).replace(/\s+/g,' ').trim().toLocaleLowerCase('es')+'|'+[...holder.content.querySelectorAll('img')].map(img=>img.getAttribute('src')).join('|');
 }
 function choicesFor(card){
     const correct=answerText(card), key=answerKey(correct);
@@ -232,7 +258,7 @@ $('#decks').onclick=async e=>{
     selected=b.dataset.id;if(b.dataset.action==='add')return $('#add').showModal();
     if(b.dataset.action==='browse')return openBrowser(selected,b.closest('article').querySelector('h3').textContent);
     try{
-        session=await api(`/api/decks/${selected}/cards`);
+        session=await deckCards(selected);
         if(!session.length)return notice('Añade tarjetas a este mazo para empezar.');
         exam=b.dataset.action==='exam';index=0;answers=[];
         if(exam){
