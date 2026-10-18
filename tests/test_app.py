@@ -1,5 +1,7 @@
 import io,json,os,sqlite3,tempfile,unittest,zipfile
-os.environ['ANKIMIO_DATA']=tempfile.mkdtemp()
+import psycopg
+from test_config import configure_test_database
+configure_test_database()
 from app import app
 
 class Workflow(unittest.TestCase):
@@ -64,7 +66,7 @@ class Workflow(unittest.TestCase):
     def test_database_context_closes_and_rolls_back(self):
         from app import db
         with db() as connection:connection.execute('SELECT 1')
-        with self.assertRaises(sqlite3.ProgrammingError):connection.execute('SELECT 1')
+        with self.assertRaises((sqlite3.ProgrammingError,psycopg.InterfaceError,psycopg.OperationalError)):connection.execute('SELECT 1')
         with self.assertRaises(RuntimeError):
             with db() as connection:
                 connection.execute('INSERT INTO decks VALUES (?,?)',('rollback-fixture','Rollback'))
@@ -72,6 +74,7 @@ class Workflow(unittest.TestCase):
         with db() as connection:
             self.assertIsNone(connection.execute('SELECT id FROM decks WHERE id=?',('rollback-fixture',)).fetchone())
 
+    @unittest.skipIf(bool(os.environ.get('ANKIMIO_TEST_DATABASE_URL')),'SQLite-specific locking test')
     def test_locked_database_returns_retryable_error_then_saves(self):
         from app import DATA
         key=self.client.post('/api/decks',json={'name':'Bloqueo'}).json['id']

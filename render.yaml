@@ -9,5 +9,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
+      - key: ANKIMIO_REQUIRE_DATABASE
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
       - key: ANKIMIO_PASSWORD
         generateValue: true

@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import quote
 
-os.environ['ANKIMIO_DATA']=tempfile.mkdtemp()
+from test_config import configure_test_database
+configure_test_database()
 from anki.collection import Collection, ExportAnkiPackageOptions
 from app import app, db
 

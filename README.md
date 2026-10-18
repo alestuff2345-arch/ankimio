@@ -1,54 +1,70 @@
 # Ankimio
-Aplicación local en español para crear mazos, repasar sin límites diarios y hacer simulacros sin tiempo máximo. Los datos se guardan en SQLite en `data/study.db`.
+Aplicación personal en español con temática de One Piece para crear e importar mazos, repasar sin límites de tiempo y hacer simulacros.
 
-## Inicio
+## Datos permanentes en Render y Supabase
+En producción, **mazos, tarjetas, ediciones e imágenes se guardan en PostgreSQL** mediante `DATABASE_URL`. Se usa el esquema `ankimio`, separado del esquema público de Supabase. Render puede reiniciarse sin eliminar esos datos. Esto requiere que la base externa esté configurada y disponible; el código por sí solo no crea una cuenta ni un proyecto de Supabase.
+
+La aplicación rechaza iniciar con almacenamiento temporal cuando está en Render (`RENDER=true`) o `ANKIMIO_REQUIRE_DATABASE=1`. Si PostgreSQL falla, muestra un error y **no cambia silenciosamente a SQLite**.
+
+### Configuración
+1. Crear una cuenta y un proyecto en [Supabase](https://supabase.com/dashboard). Guardar la contraseña de la base de datos de forma segura.
+2. En el proyecto, abrir **Connect** y seleccionar la URI de **Session pooler**, compatible con IPv4, puerto **5432**. Usar el usuario completo que muestra Supabase (incluye la referencia del proyecto). Reemplazar el marcador de contraseña por la contraseña de la base; los caracteres reservados de una contraseña deben codificarse como parte de una URI. No usar la clave pública/anon ni una clave de API como sustituto de la conexión PostgreSQL.
+3. En Render → servicio Ankimio → **Environment**, añadir **DATABASE_URL** con esa URI. No escribir el valor en GitHub, en el código ni en el chat. Mantener `ANKIMIO_PASSWORD` para proteger la aplicación.
+4. Guardar las variables y desplegar la rama `main`. El archivo `render.yaml` declara `DATABASE_URL` como valor que el usuario debe proporcionar; no incluye credenciales.
+5. Comprobar que el despliegue esté **Live**, importar un mazo, editar una tarjeta y comprobar que los datos siguen disponibles tras reiniciar el servicio.
+
+Las conexiones remotas usan TLS con verificación completa del certificado y del hostname. Por defecto se usa el almacén de certificados del sistema; si el proveedor requiere una CA adicional, configurar su ruta mediante `sslrootcert` en la conexión. No desactivar la verificación TLS. La conexión tiene límite de espera y las consultas tienen límites de duración y bloqueo.
+
+El servicio web gratuito puede dormirse y tardar en despertar. Los límites, capacidad y políticas de inactividad de Supabase dependen de su plan; guardar las imágenes en la base también consume su almacenamiento. Conservar los archivos originales de Anki como respaldo. Esta configuración es un espacio personal protegido por una contraseña, no un sistema de cuentas independientes.
+
+### Datos anteriores
+La conexión nueva no puede recuperar tarjetas que el servidor temporal ya haya perdido. En ese caso, importar el `.colpkg` original en la aplicación conectada a PostgreSQL y volver a abrir el mazo. Las pestañas antiguas pueden contener identificadores que ya no existen.
+
+Si se conserva un archivo SQLite de Ankimio (`data/study.db`), el script siguiente copia mazos, tarjetas e imágenes a una base PostgreSQL **vacía**, conserva sus identificadores y ediciones y no modifica el archivo original:
+
+```sh
+# Configurar DATABASE_URL de forma segura en el entorno antes de ejecutar.
+.venv/bin/python migrate_sqlite.py data/study.db
+```
+
+La copia es transaccional. Si el destino contiene datos o falla una inserción, se cancela sin sobrescribir los datos existentes. No es un importador de colecciones Anki: recibe exclusivamente una base SQLite de Ankimio.
+
+## Desarrollo local
+Sin `DATABASE_URL`, fuera de Render y sin exigir PostgreSQL, usa SQLite local en `data/study.db`:
+
 ```sh
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python app.py
 ```
-Abre el puerto 5000 en tu entorno. No requiere claves ni servicios externos. Es una aplicación personal sin autenticación: no exponer públicamente con datos privados. El servidor incluido es de desarrollo.
+
+También se puede desarrollar con PostgreSQL configurando `DATABASE_URL`. Las tablas se crean automáticamente sin borrar las existentes. En producción se ejecuta Gunicorn, según `render.yaml`.
 
 ## Funciones
-- Crear mazos y tarjetas de pregunta/respuesta.
-- Explorar cada mazo, buscar por pregunta o respuesta y editar tarjetas. El explorador muestra 25 tarjetas por página; Ctrl + Enter guarda los cambios del editor. También se puede editar la tarjeta actual desde el botón «Editar tarjeta» dentro del repaso, conservando el progreso y si la respuesta ya estaba visible.
-- Repasar todo el mazo y reiniciar inmediatamente cuantas veces quieras. En el repaso libre, Espacio muestra la respuesta. Después puedes calificar con Otra vez (1), Difícil (2), Bien (3) o Fácil (4); Espacio elige Bien. Otra vez y Difícil vuelven a la cola de esta sesión sin intervalos de tiempo, y solo Bien/Fácil cuentan como aprendidas. Al dominar todas, se puede reiniciar el mazo completo. Ctrl + Z (o el botón «Deshacer calificación») restaura la tarjeta anterior, el orden de pendientes y el contador, incluso al terminar. Se pueden deshacer varias calificaciones seguidas; el historial se reinicia al salir o comenzar otra vuelta. El atajo no interfiere con deshacer texto en el editor. El progreso de la sesión no se conserva al recargar.
-- Simulacros aleatorios con cantidad de preguntas configurable, alternativas A–D y calificación automática al terminar. Los distractores son respuestas distintas de otras tarjetas del mismo mazo (hasta cuatro opciones; mínimo dos respuestas distintas). Las claves se muestran al finalizar. Es recomendable usar preguntas con una única respuesta válida. Los resultados son temporales.
-- Importación de texto e imágenes incluidas en `.colpkg` y `.apkg`, tanto antiguos como modernos, incluidas colecciones comprimidas con Zstandard (`collection.anki21b`). Las colecciones modernas se leen con la biblioteca oficial de Anki, que interpreta sus plantillas y tarjetas cloze. Las colecciones antiguas conservan el lector anterior y su representación básica de cloze. Se importan imágenes PNG, JPEG, GIF, WebP, BMP y AVIF y se muestran en el repaso, explorador y simulacros, incluso si la tarjeta solo contiene una imagen. No se importan audio, CSS personalizado, SVG/oclusiones de imagen ni la programación de repasos. No es necesario activar la exportación con compatibilidad antigua para las colecciones modernas probadas.
-- El contenido importado se muestra con formato básico e imágenes locales mediante una lista de etiquetas permitidas; no se ejecutan scripts, eventos ni contenido remoto.
+- Crear mazos y tarjetas.
+- Crear tarjetas consecutivamente con Ctrl + Enter.
+- Explorar cada mazo, buscar por pregunta o respuesta, navegar 25 tarjetas por página y editar. También se puede editar la tarjeta dentro del repaso sin perder el progreso.
+- Repasar sin esperas: Otra vez (1) y Difícil (2) se repiten durante la sesión; Bien (3) y Fácil (4) cuentan como aprendidas. Espacio revela la respuesta y una segunda pulsación elige Bien. Al dominar todas se puede reiniciar el mazo completo.
+- Ctrl + Z o «Deshacer calificación» restaura la tarjeta anterior y su progreso, incluso al terminar la sesión. No interfiere con la edición de texto. El progreso de una ronda y su historial son temporales y se reinician al recargar; los mazos y las ediciones se guardan en la base configurada.
+- Simulacros con hasta cuatro alternativas basadas en otras respuestas del mismo mazo; requieren al menos dos respuestas distintas. Calificación automática y claves al terminar. Espacio avanza después de marcar una alternativa. Los resultados del simulacro son temporales.
+- Eliminar todos los mazos y sus imágenes, previa confirmación.
+- Guardado del editor con límite de espera, opción de dejar de esperar, conservación del texto ante errores y reintento.
+
+## Importación e imágenes
+Admite `.colpkg` y `.apkg` antiguos y modernos, incluidos paquetes comprimidos con Zstandard. Las colecciones modernas se leen con la biblioteca oficial de Anki; las antiguas conservan una representación básica de cloze.
+
+Exportar desde Anki con los archivos multimedia incluidos. Se admiten PNG, JPEG, GIF, WebP, BMP y AVIF. Audio, SVG, oclusiones de imagen, estilos personalizados y programación de repasos no se importan. El contenido se muestra con una lista de etiquetas permitidas, sin scripts, eventos ni recursos externos.
+
+Las imágenes están en la misma base que las tarjetas. `/api/decks/<id>/study` entrega las tarjetas y sus imágenes en una respuesta autenticada; el navegador conserva una copia de las imágenes para la sesión. La edición guarda referencias permanentes, no direcciones temporales del navegador. Los mazos importados antes del soporte de imágenes deben importarse de nuevo para recuperarlas.
 
 ## Pruebas
 ```sh
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-## Publicación y Netlify
-Netlify puede alojar una interfaz estática, pero no ejecuta este servidor Flask persistente ni conserva su SQLite local. Subir este repositorio directamente como sitio estático no permite crear/importar mazos.
+Para ejecutar también las pruebas de PostgreSQL y migración, usar una base **exclusiva para pruebas**, configurada mediante `ANKIMIO_TEST_DATABASE_URL`. La suite ignora la variable de producción `DATABASE_URL` y elimina datos en su destino de pruebas. Nunca apuntarla a la base de uso personal.
 
-Para conservar la arquitectura actual, usar un alojamiento con Python y un disco persistente para `data/` (o configurar `ANKIMIO_DATA` a la ruta del disco). Instalar las dependencias y usar un servidor WSGI de producción en lugar del servidor de desarrollo incluido. Antes de hacer la aplicación pública hay que añadir autenticación y separación de datos por usuario.
+Las pruebas cubren paquetes exportados por Anki, imágenes, edición, transacciones, configuración de persistencia y TLS, y migración sin pérdida de identificadores. Las pruebas específicas de SQLite se omiten al probar PostgreSQL; las de migración PostgreSQL se omiten cuando no hay una base de pruebas.
 
-Otra opción es separar la interfaz para Netlify y alojar la API Flask con almacenamiento persistente en otro servicio; eso requiere adaptar las URL de la API y configurar el acceso entre ambos orígenes. La aplicación aún no está preparada para esa modalidad ni ha sido desplegada.
-
-### Prueba gratuita en Render (Blueprint)
-Este repositorio incluye `render.yaml` con el plan `free`, Gunicorn y una contraseña generada por Render. En el panel de Render, elegir **New → Blueprint**, seleccionar este repositorio, usar la rama `main` y crear los recursos descritos en el archivo.
-
-Cuando el despliegue termine, abrir la URL que Render asigne al servicio. El usuario es `ankimio`; la contraseña se consulta en la variable `ANKIMIO_PASSWORD` de la sección **Environment** del servicio. No compartir esa contraseña ni subirla al repositorio. Esta protección es para un espacio personal compartido; no implementa cuentas independientes.
-
-**Los datos del plan gratuito son temporales**: los mazos creados o importados pueden perderse con reinicios y nuevos despliegues. Usar solo datos de prueba y conservar los archivos originales de Anki. El servicio gratuito también puede tardar en responder al despertar después de estar inactivo. Para guardar datos de forma permanente, cambiar a un plan con disco persistente y configurar `ANKIMIO_DATA` a la ruta montada.
-
-Las pruebas de importación generan archivos con la biblioteca oficial de Anki y verifican paquetes modernos comprimidos, colecciones sin compresión, exportaciones antiguas, tarjetas normales, inversas y cloze, además del rechazo de archivos dañados.
-
-
-## Imágenes de Anki
-Al exportar desde Anki, incluir los archivos multimedia. El importador lee tanto el índice JSON antiguo como el índice protobuf comprimido moderno, verifica las sumas de integridad disponibles y guarda las imágenes junto con los mazos en SQLite. No extrae rutas del paquete al sistema de archivos. Las rutas `/media/<id>` requieren la misma contraseña que la aplicación cuando está configurada. Eliminar todos los mazos elimina también sus imágenes.
-
-Los mazos importados antes de esta función deben importarse de nuevo desde el archivo original, ya que sus imágenes nunca se guardaron. Se avisa cuando una referencia no tiene archivo incluido o usa un formato no compatible. Las imágenes externas enlazadas y SVG no se cargan. Editar el texto de una tarjeta conserva sus imágenes existentes. En el plan gratuito de Render, las imágenes también son temporales junto con el resto de la base de datos.
-
-Si una imagen local falla al cargarse, se reintenta una vez y después se ofrece «Reintentar imagen». Esta recuperación no restaura archivos perdidos por reinicios del alojamiento gratuito; en ese caso hay que reimportar el paquete original.
-
-El editor limita la espera de guardado a 20 segundos. «Dejar de esperar» cancela la espera sin cerrar el editor; ante un error o una respuesta no confirmada conserva los campos y permite reintentar. No asume que cancelar la espera haya cancelado una escritura ya recibida por el servidor. Las conexiones SQLite se cierran al terminar cada operación y los bloqueos se devuelven como errores recuperables.
-
-
-Al abrir un mazo para estudiar o explorar, `/api/decks/<id>/study` entrega sus tarjetas y las imágenes referenciadas en una sola respuesta autenticada. La interfaz crea copias de esas imágenes en memoria y las reutiliza durante la sesión, sin depender de peticiones posteriores a `/media/`. Al editar se guardan siempre referencias duraderas, nunca direcciones temporales del navegador. Las copias se liberan al cargar otro mazo o al eliminar todos los mazos.
-
-Esta copia protege las imágenes de una sesión ya cargada frente a cortes de red o reinicios posteriores; no es almacenamiento permanente, no sobrevive a recargar la página y no permite guardar ediciones sin conexión. Si el servidor gratuito ya perdió la base de datos o los archivos, hay que importar de nuevo el paquete original.
+## Netlify
+Este servidor Flask necesita un alojamiento Python. Netlify puede servir una interfaz separada, pero subir este repositorio como sitio estático no ejecuta la API. La configuración incluida usa Render para la aplicación y PostgreSQL externo para la persistencia.

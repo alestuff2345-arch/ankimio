@@ -1,18 +1,17 @@
 import base64
 import io, json, os, random, re, sqlite3, tempfile, uuid, zipfile
-from contextlib import contextmanager
 from pathlib import Path
 from flask import Flask, jsonify, request, render_template, send_file
 import zstandard
 import hmac
+import psycopg
+from storage import DATA, db, initialize_storage
 from anki.collection import Collection
 from anki.errors import AnkiException
 from anki_media import unpack, read_images, rewrite_images
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 128 * 1024 * 1024
-DATA = Path(os.environ.get('ANKIMIO_DATA', Path(__file__).parent / 'data'))
-DATA.mkdir(parents=True, exist_ok=True)
 
 @app.before_request
 def protect_trial():
@@ -32,21 +31,17 @@ def health():
         c.execute('SELECT 1 FROM decks LIMIT 1').fetchone()
     return jsonify(status='ok')
 
-@contextmanager
-def db():
-    c=sqlite3.connect(DATA / 'study.db',timeout=5)
-    c.row_factory=sqlite3.Row
-    try:
-        with c:yield c
-    finally:c.close()
-
 @app.errorhandler(sqlite3.OperationalError)
+@app.errorhandler(psycopg.Error)
 def database_error(error):
-    app.logger.warning('Database operation failed: %s',error)
+    # Avoid logging connection strings or credentials from database exceptions.
+    app.logger.warning('Database operation failed (%s)',type(error).__name__)
     return jsonify(error='La base de datos no está disponible en este momento. Conserva tus cambios y vuelve a intentarlo.'),503
 
-with db() as c:
-    c.executescript('CREATE TABLE IF NOT EXISTS media(id TEXT PRIMARY KEY,mime TEXT,content BLOB); CREATE TABLE IF NOT EXISTS decks(id TEXT PRIMARY KEY,name TEXT); CREATE TABLE IF NOT EXISTS cards(id TEXT PRIMARY KEY,deck TEXT,front TEXT,back TEXT);')
+try:
+    initialize_storage()
+except psycopg.Error:
+    raise RuntimeError('No se pudo iniciar PostgreSQL. Revisa DATABASE_URL, la conexión Session pooler y su certificado TLS. No se usará una base temporal.') from None
 
 @app.get('/')
 def home(): return render_template('index.html')

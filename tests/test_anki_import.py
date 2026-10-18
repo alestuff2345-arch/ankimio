@@ -6,7 +6,8 @@ import unittest
 import zipfile
 from pathlib import Path
 from anki.collection import Collection, ExportAnkiPackageOptions
-os.environ['ANKIMIO_DATA']=tempfile.mkdtemp()
+from test_config import configure_test_database
+configure_test_database()
 from app import app
 
 class AnkiPackageImport(unittest.TestCase):
