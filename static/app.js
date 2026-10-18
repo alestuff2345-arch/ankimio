@@ -1,5 +1,38 @@
 const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown,reviewHistory=[],reviewDifficulty=new Map(),reviewFullDeck=[],reviewOnlyDifficult=false;
 let spacedEnabled=true,reviewTracking=false,reviewMode='all',reviewBusy=false,pendingRating=null,retryReviewAction=null;
+let reviewRoundActive=false,pendingUndo=null;
+function savedRound(deck){const s=RoundStore.read(deck);return s && (s.queue.length || s.pendingUndo || s.pendingRating)?s:null;}
+function resumeButtonHtml(deck){
+    const s=savedRound(deck);
+    return s?`<div class="resume-round"><p>${s.known} / ${s.round.length} completadas · Ronda guardada en este navegador</p><button class="primary" data-id="${deck}" data-action="resume">Continuar repaso (${s.pendingUndo?'recuperar último cambio':s.queue.length+' pendientes'})</button></div>`:'';
+}
+function saveRound(){
+    if(!reviewRoundActive || !selected || !reviewDeck?.length)return;
+    const snapshot={version:1,deck:selected,full:reviewFullDeck.map(c=>c.id),round:reviewDeck.map(c=>c.id),queue:reviewQueue.map(c=>c.id),known:reviewKnown,
+        tracking:reviewTracking,mode:reviewMode,onlyDifficult:reviewOnlyDifficult,revealed:Boolean($('#answer') && !$('#answer').hidden),
+        difficulty:[...reviewDifficulty].map(([card,count])=>[card.id,count]),
+        history:reviewHistory.map(h=>({...h,card:h.card.id})),
+        pendingRating:pendingRating?{card:pendingRating.card.id,body:pendingRating.body}:null,pendingUndo};
+    if(!RoundStore.save(snapshot))notice('Este navegador no permite guardar la ronda. Si cierras o recargas esta pestaña, no podrás continuar desde aquí.');
+}
+function restoreRound(snapshot,cards){
+    const lookup=new Map(cards.map(c=>[c.id,c]));
+    if(!snapshot.full.every(id=>lookup.has(id))){
+        leave();notice('Algunas tarjetas de esta ronda ya no están en el mazo. Elige Empezar de nuevo para estudiar las tarjetas actuales.');return;
+    }
+    reviewFullDeck=snapshot.full.map(id=>lookup.get(id));reviewDeck=snapshot.round.map(id=>lookup.get(id));reviewQueue=snapshot.queue.map(id=>lookup.get(id));
+    reviewKnown=snapshot.known;reviewTracking=spacedEnabled;reviewMode=snapshot.mode;reviewOnlyDifficult=snapshot.onlyDifficult;
+    reviewDifficulty=new Map(snapshot.difficulty.map(([id,count])=>[lookup.get(id),count]));
+    reviewHistory=snapshot.history.map(h=>({...h,card:lookup.get(h.card)}));
+    pendingRating=snapshot.pendingRating?{card:lookup.get(snapshot.pendingRating.card),body:snapshot.pendingRating.body,rating:snapshot.pendingRating.body.rating,eventId:snapshot.pendingRating.body.event_id}:null;
+    pendingUndo=snapshot.pendingUndo;retryReviewAction=null;reviewRoundActive=true;
+    showReview();if(snapshot.revealed || pendingRating || pendingUndo)$('#reveal')?.click();
+    if(pendingRating)saveRating();
+    else if(pendingUndo)undoReview();
+    else notice('Ronda recuperada. Continúas donde la dejaste.');
+}
+window.addEventListener('pagehide',saveRound);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')saveRound();});
 try{spacedEnabled=localStorage.getItem('ankimio.spaced-review')!=='off';}catch{}
 const reviewTimezone=Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const timezoneQuery='timezone='+encodeURIComponent(reviewTimezone);
@@ -18,7 +51,7 @@ function progressHtml(card){
 function deckProgressHtml(d){
     if(!spacedEnabled)return '';
     const p=d.review || {};
-    return `<div class="deck-progress"><p><strong>${p.due||0} para repasar · ${p.new||0} nuevas</strong></p><p>${p.learned_today||0} aprendidas hoy · ${p.consolidated||0} consolidadas</p>${p.next_due?`<p>Próxima fecha: ${shortDate(p.next_due)}</p>`:''}<button data-id="${d.id}" data-action="recommended" ${(p.due||0)+(p.new||0)?'':'disabled'}>Repaso recomendado (${(p.due||0)+(p.new||0)})</button></div>`;
+    return `<div class="deck-progress"><p><strong>${p.due||0} para repasar · ${p.new||0} nuevas</strong></p><p>${p.learned_today||0} aprendidas hoy · ${p.consolidated||0} consolidadas</p>${p.next_due?`<p>Próxima fecha: ${shortDate(p.next_due)}</p>`:''}${savedRound(d.id)?'':`<button data-id="${d.id}" data-action="recommended" ${(p.due||0)+(p.new||0)?'':'disabled'}>Repaso recomendado (${(p.due||0)+(p.new||0)})</button>`}</div>`;
 }
 $('#spacedtoggle').checked=spacedEnabled;
 $('#spacedtoggle').onchange=()=>{
@@ -137,7 +170,7 @@ async function deckCards(key){
     return bundle.cards;
 }
 function notice(s){$('#notice').textContent=s}
-async function load(){try{const decks=await api('/api/decks?'+timezoneQuery);$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['◈','✦','◉','⬡'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p>${deckProgressHtml(d)}<div class="deck-actions"><button data-id="${d.id}" data-action="review">${spacedEnabled?'Repasar todo ↗':'Repasar ↗'}</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>Tu próxima idea empieza aquí.</h3><p>Crea un mazo o importa tus tarjetas de Anki para empezar.</p></div>'}catch(e){notice(e.message)}}
+async function load(){try{const decks=await api('/api/decks?'+timezoneQuery);$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['◈','✦','◉','⬡'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p>${deckProgressHtml(d)}${resumeButtonHtml(d.id)}<div class="deck-actions"><button data-id="${d.id}" data-action="${savedRound(d.id)?'restart':'review'}">${savedRound(d.id)?'Empezar de nuevo':spacedEnabled?'Repasar todo ↗':'Repasar ↗'}</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>Tu próxima idea empieza aquí.</h3><p>Crea un mazo o importa tus tarjetas de Anki para empezar.</p></div>'}catch(e){notice(e.message)}}
 $('#deleteall').onclick=()=>{
     $('#deletestatus').textContent='';$('#deleteconfirm').showModal();
 };
@@ -151,6 +184,7 @@ $('#deleteform').onsubmit=async e=>{
     buttons.forEach(b=>b.disabled=true);$('#deletestatus').textContent='Eliminando…';
     try{
         const result=await api('/api/decks',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
+        reviewRoundActive=false;pendingUndo=null;RoundStore.clearAll();
         clearSessionImages();selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;reviewHistory=[];reviewDifficulty.clear();reviewFullDeck=[];reviewOnlyDifficult=false;
         $('#study').hidden=true;$('#study').innerHTML='';$('#library').hidden=false;
         $('#deleteconfirm').close();
@@ -195,6 +229,7 @@ $('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormDa
 let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=false,editingDeck=null,afterCardEdit=null,editRequest=null;
 const pageSize=25;
 async function openBrowser(deck,name){
+    reviewRoundActive=false;
     try{
         const cards=await deckCards(deck);
         browseDeck=deck;browseCards=cards.sort((a,b)=>plain(a.front).localeCompare(plain(b.front),'es'));browsePage=0;
@@ -284,12 +319,14 @@ function choicesFor(card){
 }
 $('#decks').onclick=async e=>{
     const b=e.target.closest('button');if(!b)return;
+    if(b.dataset.action==='restart' && !confirm('¿Empezar una ronda nueva? Se reemplazará la ronda pendiente de este mazo. Tus tarjetas y el progreso de aprendizaje se conservan.'))return;
     selected=b.dataset.id;if(b.dataset.action==='add')return $('#add').showModal();
     if(b.dataset.action==='browse')return openBrowser(selected,b.closest('article').querySelector('h3').textContent);
     try{
         session=await deckCards(selected);
         if(!session.length)return notice('Añade tarjetas a este mazo para empezar.');
         exam=b.dataset.action==='exam';index=0;answers=[];
+        reviewRoundActive=false;
         if(exam){
             session=session.filter(c=>hasCardContent(c.front) && hasCardContent(c.back));
             const unique=new Map();
@@ -306,6 +343,8 @@ $('#decks').onclick=async e=>{
                 session=session.slice(0,Number($('#amount').value)).map(c=>({...c,choices:choicesFor(c)}));show();
             };
         }else{
+            const saved=savedRound(selected);
+            if(saved && b.dataset.action!=='restart'){restoreRound(saved,session);return;}
             const recommended=b.dataset.action==='recommended';
             const cards=recommended?session.filter(c=>c.progress?.due):session;
             if(!cards.length){leave();return notice('Hoy no hay tarjetas recomendadas. Puedes elegir Repasar todo cuando quieras.');}
@@ -313,8 +352,9 @@ $('#decks').onclick=async e=>{
         }
     }catch(e){notice(e.message)}
 };
-function leave(){if(reviewBusy)return;reviewHistory=[];reviewDifficulty.clear();pendingRating=null;retryReviewAction=null;$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
+function leave(){if(reviewBusy)return;saveRound();reviewRoundActive=false;reviewHistory=[];reviewDifficulty.clear();pendingRating=null;pendingUndo=null;retryReviewAction=null;$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
 function startReview(cards,fullDeck=cards,onlyDifficult=false,mode='all'){
+    reviewRoundActive=true;pendingUndo=null;
     reviewTracking=spacedEnabled;reviewMode=mode;pendingRating=null;retryReviewAction=null;
     reviewFullDeck=[...fullDeck];reviewOnlyDifficult=onlyDifficult;
     reviewDeck=[...cards];reviewQueue=shuffled(cards);reviewKnown=0;reviewHistory=[];reviewDifficulty.clear();showReview();
@@ -323,10 +363,11 @@ async function undoReview(){
     if(exam || $('#study').hidden || !reviewHistory.length || reviewBusy || pendingRating)return;
     const previous=reviewHistory[reviewHistory.length-1];
     if(previous.eventId){
+        pendingUndo=previous.eventId;saveRound();
         const restore=lockReviewControls();
         try{
             const result=await api(`/api/decks/${selected}/cards/${previous.card.id}/reviews/${previous.eventId}/undo`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timezone:reviewTimezone})},20000);
-            previous.card.progress=result.progress;retryReviewAction=null;
+            previous.card.progress=result.progress;retryReviewAction=null;pendingUndo=null;
         }catch(error){reviewRequestFailed(error,undoReview);return;}
         finally{restore();}
     }
@@ -367,6 +408,7 @@ async function rateReview(rating){
     if(!reviewTracking){applyRating(card,rating);return;}
     const eventId=[...crypto.getRandomValues(new Uint8Array(16))].map(x=>x.toString(16).padStart(2,'0')).join('');
     pendingRating={card,rating,eventId,body:{event_id:eventId,rating,expected_revision:card.progress?.revision??null,timezone:reviewTimezone}};
+    saveRound();
     await saveRating();
 }
 async function saveRating(){
@@ -406,10 +448,11 @@ function showReview(){
         $('#undoreview').onclick=undoReview;
         $('#complicated').onclick=()=>{if(difficult.length)startReview(difficult,reviewFullDeck,true);};
         $('#again').onclick=()=>startReview(reviewFullDeck);
+        saveRound();
         return;
     }
     const c=reviewQueue[0];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>${reviewOnlyDifficult?'Repaso de complicadas':reviewMode==='recommended'?'Repaso recomendado':'Repaso libre'}</h2><span>${reviewKnown} / ${reviewDeck.length} completadas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><button id="editcurrent" type="button">Editar tarjeta</button></div>${progressHtml(c)}<div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Me resultó fácil</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p><div id="reviewstatus" role="status" aria-live="polite"></div>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>${reviewOnlyDifficult?'Repaso de complicadas':reviewMode==='recommended'?'Repaso recomendado':'Repaso libre'}</h2><span>${reviewKnown} / ${reviewDeck.length} completadas · ${reviewQueue.length} pendientes</span></div><p class="hint">Tu ronda se guarda automáticamente en este navegador.</p><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><button id="editcurrent" type="button">Editar tarjeta</button></div>${progressHtml(c)}<div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Me resultó fácil</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p><div id="reviewstatus" role="status" aria-live="polite"></div>`;
     $('#undoreview').onclick=undoReview;
     $('#editcurrent').onclick=()=>{
         const wasRevealed=!$('#answer').hidden;
@@ -418,11 +461,13 @@ function showReview(){
     $('#reveal').onclick=()=>{
         $('#answer').hidden=false;$('#ratings').hidden=false;$('#reveal').hidden=true;
         $('#reviewhint').textContent='1: Otra vez · 2: Difícil · 3: Bien · 4: Fácil · Espacio: Bien.';
+        saveRound();
     };
     $('#ratings').onclick=e=>{
         const button=e.target.closest('button[data-rating]');if(!button || $('#answer').hidden)return;
         rateReview(button.dataset.rating);
     };
+    saveRound();
 }
 function show(){
     const c=session[index];

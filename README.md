@@ -47,11 +47,18 @@ También se puede desarrollar con PostgreSQL configurando `DATABASE_URL`. Las ta
 - Repasar sin esperas: Otra vez (1) y Difícil (2) se repiten durante la sesión; Bien (3) y Fácil (4) cuentan como aprendidas. Espacio revela la respuesta y una segunda pulsación elige Bien. Al dominar todas se puede reiniciar el mazo completo.
 - Prueba opcional de repasos espaciados y dominio: el interruptor de la biblioteca permite desactivarla en este navegador sin borrar tarjetas ni progreso. «Repaso recomendado» reúne tarjetas nuevas y repasos pendientes; «Repasar todo» sigue disponible sin esperas ni límites.
 - El seguimiento diferencia «Nueva», «En aprendizaje», «Aprendida hoy» y «Consolidada». Una tarjeta se considera consolidada tras al menos 3 aciertos en repasos recomendados de días distintos, a lo largo de 7 días o más. Es un indicador basado en tus calificaciones; pulsar Fácil una vez no basta.
-- Al terminar una ronda aparece «Repasar las complicadas»: incluye únicamente las tarjetas marcadas como Otra vez o Difícil en esa ronda, aunque luego se hayan acertado. La selección se recalcula al terminar cada ronda de refuerzo. Deshacer una calificación también deshace su marca de dificultad. «Repasar todo de nuevo» recupera siempre el mazo completo, incluso después de un refuerzo. Este seguimiento dura la sesión abierta.
-- Ctrl + Z o «Deshacer calificación» restaura la tarjeta anterior y su progreso, incluso al terminar la sesión. Si el seguimiento está activado, también restaura la fecha recomendada y el dominio guardados. No interfiere con la edición de texto. La cola de una ronda y los botones para deshacer son temporales y se reinician al recargar; los mazos, ediciones y progreso de aprendizaje se guardan en la base configurada.
+- Al terminar una ronda aparece «Repasar las complicadas»: incluye únicamente las tarjetas marcadas como Otra vez o Difícil en esa ronda, aunque luego se hayan acertado. La selección se recalcula al terminar cada ronda de refuerzo. Deshacer una calificación también deshace su marca de dificultad. «Repasar todo de nuevo» recupera siempre el mazo completo, incluso después de un refuerzo. Este seguimiento se conserva al continuar una ronda guardada.
+- Ctrl + Z o «Deshacer calificación» restaura la tarjeta anterior y su progreso, incluso al terminar la sesión. Si el seguimiento está activado, también restaura la fecha recomendada y el dominio guardados. No interfiere con la edición de texto. La cola, el orden, la respuesta revelada y el historial para deshacer se guardan automáticamente en el navegador; los mazos, ediciones y progreso de aprendizaje se guardan en la base configurada.
 - Simulacros con hasta cuatro alternativas basadas en otras respuestas del mismo mazo; requieren al menos dos respuestas distintas. Calificación automática y claves al terminar. Espacio avanza después de marcar una alternativa. Los resultados del simulacro son temporales.
 - Eliminar todos los mazos y sus imágenes, previa confirmación.
 - Guardado del editor con límite de espera, opción de dejar de esperar, conservación del texto ante errores y reintento.
+
+### Continuar una ronda
+La biblioteca muestra «Continuar repaso» cuando hay una ronda pendiente en ese navegador. Conserva el orden exacto, las tarjetas repetidas, las completadas, la selección de complicadas, el modo de repaso y Ctrl + Z, incluso al recargar o cerrar la pestaña. «Empezar de nuevo» pide confirmación antes de reemplazar la ronda pendiente. Se puede dejar una ronda pendiente en cada mazo; explorar tarjetas o hacer un simulacro no la reemplaza.
+
+La ronda se guarda después de cada cambio y antes de enviar una calificación o deshacerla. Al continuar una solicitud interrumpida, se reintenta con su identificador original para evitar duplicarla. Las tarjetas, sus ediciones y las imágenes se vuelven a cargar desde la base; el navegador solo guarda identificadores y el estado de la ronda. El guardado de rondas también funciona con el seguimiento espaciado desactivado. Eliminar todos los mazos elimina sus rondas locales.
+
+Este guardado usa `localStorage` del mismo navegador y dirección de la aplicación. No se transfiere a otros dispositivos ni sobrevive al borrado de los datos del navegador; en modo privado depende de que el navegador los conserve. Si el almacenamiento está bloqueado o lleno, la aplicación lo indica. Las rondas perdidas antes de esta actualización no se pueden reconstruir. Los simulacros siguen siendo temporales.
 
 ### Repasos espaciados opcionales
 El seguimiento está activado inicialmente y puede desmarcarse en «Probar repasos espaciados y seguimiento». Al desactivarlo, se ocultan las recomendaciones y el dominio y se dejan de registrar calificaciones; al reactivarlo se recupera el progreso anterior. Esta preferencia se guarda en el navegador. Los simulacros no alteran el seguimiento.
@@ -72,7 +79,10 @@ Las imágenes están en la misma base que las tarjetas. `/api/decks/<id>/study` 
 ## Pruebas
 ```sh
 .venv/bin/python -m unittest discover -s tests -v
+node --test tests/test_rounds.cjs
 ```
+
+La prueba de navegador opcional `node tests/test_rounds_browser.cjs` requiere Playwright, Chromium en `/usr/bin/chromium` y el entorno `.venv`. Crea su propia base temporal y servidor local en un puerto libre; comprueba la recuperación después de reiniciar ese proceso, recargar, editar, hacer un simulacro y perder una respuesta de guardado. No usa la conexión de producción.
 
 Para ejecutar también las pruebas de PostgreSQL y migración, usar una base **exclusiva para pruebas**, configurada mediante `ANKIMIO_TEST_DATABASE_URL`. La suite ignora la variable de producción `DATABASE_URL` y elimina datos en su destino de pruebas. Nunca apuntarla a la base de uso personal.
 
