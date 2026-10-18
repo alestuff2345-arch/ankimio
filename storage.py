@@ -78,6 +78,7 @@ def db():
             raise RuntimeError('Falta DATABASE_URL. Configura PostgreSQL en Render para evitar que se pierdan los mazos. No se usará almacenamiento temporal.')
         connection=sqlite3.connect(DATA/'study.db',timeout=5)
         connection.row_factory=sqlite3.Row
+        connection.execute('PRAGMA foreign_keys=ON')
         try:
             with connection: yield connection
         finally: connection.close()
@@ -117,3 +118,9 @@ def initialize_storage():
         connection.execute('CREATE TABLE IF NOT EXISTS decks(id TEXT PRIMARY KEY,name TEXT)')
         connection.execute('CREATE TABLE IF NOT EXISTS cards(id TEXT PRIMARY KEY,deck TEXT,front TEXT,back TEXT)')
         connection.execute('CREATE INDEX IF NOT EXISTS cards_deck_index ON cards(deck)')
+        connection.execute('CREATE TABLE IF NOT EXISTS card_progress('
+                           'card_id TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE,state TEXT NOT NULL)')
+        connection.execute('CREATE TABLE IF NOT EXISTS review_events('
+                           'id TEXT PRIMARY KEY,card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,'
+                           'rating TEXT NOT NULL,previous_state TEXT NOT NULL,undone INTEGER NOT NULL DEFAULT 0)')
+        connection.execute('CREATE INDEX IF NOT EXISTS review_events_card_index ON review_events(card_id)')

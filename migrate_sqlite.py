@@ -18,12 +18,15 @@ def migrate(source_path):
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as source,db() as target:
         source.execute('BEGIN')
         target.execute('SELECT pg_advisory_xact_lock(18001742)')
-        for table in ('decks','cards','media'):
+        for table in ('decks','cards','media','card_progress','review_events'):
             if target.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]:
                 raise RuntimeError('La base de destino no está vacía. La migración se canceló sin sobrescribir datos.')
         existing={r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not {'decks','cards'}<=existing:raise RuntimeError('El archivo no es una base de Ankimio.')
-        for table,columns in (('decks','id,name'),('media','id,mime,content'),('cards','id,deck,front,back')):
+        tables=[('decks','id,name'),('media','id,mime,content'),('cards','id,deck,front,back')]
+        for table,columns in (('card_progress','card_id,state'),('review_events','id,card_id,rating,previous_state,undone')):
+            if table in existing:tables.append((table,columns))
+        for table,columns in tables:
             counts[table]=0
             if table not in existing:continue
             cursor=source.execute(f'SELECT {columns} FROM {table}')

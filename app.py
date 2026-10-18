@@ -9,6 +9,8 @@ from storage import DATA, db, initialize_storage, database_connection_hint
 from anki.collection import Collection
 from anki.errors import AnkiException
 from anki_media import unpack, read_images, rewrite_images
+from review import (ReviewError, today_in_zone, progress_for_deck, deck_summaries,
+                    record_review, undo_review)
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 128 * 1024 * 1024
@@ -48,8 +50,22 @@ def home(): return render_template('index.html')
 
 @app.get('/api/decks')
 def decks():
+    today=today_in_zone(request.args.get('timezone','UTC'))
     with db() as c:
-        return jsonify([dict(r) for r in c.execute('SELECT decks.*,count(cards.id) AS count FROM decks LEFT JOIN cards ON cards.deck=decks.id GROUP BY decks.id ORDER BY name')])
+        summaries=deck_summaries(c,today)
+        return jsonify([dict(r,review=summaries.get(r['id'],{})) for r in c.execute('SELECT decks.*,count(cards.id) AS count FROM decks LEFT JOIN cards ON cards.deck=decks.id GROUP BY decks.id ORDER BY name')])
+
+@app.errorhandler(ReviewError)
+def invalid_review(error):
+    return jsonify(error=str(error)),error.status
+
+@app.post('/api/decks/<key>/cards/<card_id>/reviews')
+def save_review(key,card_id):
+    return jsonify(record_review(key,card_id,request.get_json(silent=True)))
+
+@app.post('/api/decks/<key>/cards/<card_id>/reviews/<event_id>/undo')
+def revert_review(key,card_id,event_id):
+    return jsonify(undo_review(key,card_id,event_id,request.get_json(silent=True)))
 
 @app.post('/api/decks')
 def create():
@@ -91,10 +107,13 @@ def cards(key):
 def study_bundle(key):
     # Deliver the referenced images in the same response as the cards. Once
     # loaded, a session no longer depends on later requests to /media/.
+    today=today_in_zone(request.args.get('timezone','UTC'))
     with db() as c:
         if not c.execute('SELECT 1 FROM decks WHERE id=?',(key,)).fetchone():
             return jsonify(error='El mazo ya no está en el servidor. Vuelve a importar el archivo original.'),404
         rows=[dict(r) for r in c.execute('SELECT * FROM cards WHERE deck=?',(key,))]
+        progress=progress_for_deck(c,key,today)
+        for card in rows:card['progress']=progress[card['id']]
         tokens=set()
         for card in rows:
             for side in ('front','back'):tokens.update(re.findall(r'/media/([0-9a-f]{32})',card[side]))
@@ -105,7 +124,7 @@ def study_bundle(key):
             for asset in c.execute(f'SELECT id,mime,content FROM media WHERE id IN ({marks})',batch):
                 images['/media/'+asset['id']]='data:'+asset['mime']+';base64,'+base64.b64encode(asset['content']).decode('ascii')
     random.shuffle(rows)
-    response=jsonify(cards=rows,images=images)
+    response=jsonify(cards=rows,images=images,today=today.isoformat())
     response.headers['Cache-Control']='private, no-store'
     return response
 

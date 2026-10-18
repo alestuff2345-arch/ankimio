@@ -45,11 +45,22 @@ También se puede desarrollar con PostgreSQL configurando `DATABASE_URL`. Las ta
 - Crear tarjetas consecutivamente con Ctrl + Enter.
 - Explorar cada mazo, buscar por pregunta o respuesta, navegar 25 tarjetas por página y editar. También se puede editar la tarjeta dentro del repaso sin perder el progreso.
 - Repasar sin esperas: Otra vez (1) y Difícil (2) se repiten durante la sesión; Bien (3) y Fácil (4) cuentan como aprendidas. Espacio revela la respuesta y una segunda pulsación elige Bien. Al dominar todas se puede reiniciar el mazo completo.
+- Prueba opcional de repasos espaciados y dominio: el interruptor de la biblioteca permite desactivarla en este navegador sin borrar tarjetas ni progreso. «Repaso recomendado» reúne tarjetas nuevas y repasos pendientes; «Repasar todo» sigue disponible sin esperas ni límites.
+- El seguimiento diferencia «Nueva», «En aprendizaje», «Aprendida hoy» y «Consolidada». Una tarjeta se considera consolidada tras al menos 3 aciertos en repasos recomendados de días distintos, a lo largo de 7 días o más. Es un indicador basado en tus calificaciones; pulsar Fácil una vez no basta.
 - Al terminar una ronda aparece «Repasar las complicadas»: incluye únicamente las tarjetas marcadas como Otra vez o Difícil en esa ronda, aunque luego se hayan acertado. La selección se recalcula al terminar cada ronda de refuerzo. Deshacer una calificación también deshace su marca de dificultad. «Repasar todo de nuevo» recupera siempre el mazo completo, incluso después de un refuerzo. Este seguimiento dura la sesión abierta.
-- Ctrl + Z o «Deshacer calificación» restaura la tarjeta anterior y su progreso, incluso al terminar la sesión. No interfiere con la edición de texto. El progreso de una ronda y su historial son temporales y se reinician al recargar; los mazos y las ediciones se guardan en la base configurada.
+- Ctrl + Z o «Deshacer calificación» restaura la tarjeta anterior y su progreso, incluso al terminar la sesión. Si el seguimiento está activado, también restaura la fecha recomendada y el dominio guardados. No interfiere con la edición de texto. La cola de una ronda y los botones para deshacer son temporales y se reinician al recargar; los mazos, ediciones y progreso de aprendizaje se guardan en la base configurada.
 - Simulacros con hasta cuatro alternativas basadas en otras respuestas del mismo mazo; requieren al menos dos respuestas distintas. Calificación automática y claves al terminar. Espacio avanza después de marcar una alternativa. Los resultados del simulacro son temporales.
 - Eliminar todos los mazos y sus imágenes, previa confirmación.
 - Guardado del editor con límite de espera, opción de dejar de esperar, conservación del texto ante errores y reintento.
+
+### Repasos espaciados opcionales
+El seguimiento está activado inicialmente y puede desmarcarse en «Probar repasos espaciados y seguimiento». Al desactivarlo, se ocultan las recomendaciones y el dominio y se dejan de registrar calificaciones; al reactivarlo se recupera el progreso anterior. Esta preferencia se guarda en el navegador. Los simulacros no alteran el seguimiento.
+
+Los intervalos sugeridos para Bien siguen 1, 3, 7, 14, 30, 60 y 90 días; Fácil sugiere el escalón siguiente. Otra vez o Difícil reinician la secuencia y mantienen la tarjeta pendiente hoy, además de repetirla dentro de la ronda. Si finalmente se acierta después de una dificultad del mismo día, el siguiente repaso será mañana. Repetir antes de la fecha recomendada no añade días de aciertos ni retrasa la fecha. Se usa el día local de la zona horaria del navegador, calculado con el reloj del servidor.
+
+Las fechas y el dominio se guardan por tarjeta en `card_progress`. Las operaciones de `review_events` permiten deshacer y reintentar solicitudes sin contar dos veces una respuesta perdida. Las escrituras son transaccionales y una pestaña con progreso antiguo no puede sobrescribir una sesión más reciente. Un fallo de guardado conserva la tarjeta en pantalla y ofrece Reintentar o volver a Mis mazos. Eliminar todos los mazos elimina también estos registros. La migración de SQLite a PostgreSQL conserva estas tablas cuando existen; las bases anteriores siguen siendo compatibles.
+
+Las tablas nuevas se crean automáticamente sin cambiar el contenido de tarjetas, mazos o imágenes. Las ediciones de texto conservan el seguimiento de la tarjeta. La opción se puede retirar del código después de la prueba sin borrar esos contenidos.
 
 ## Importación e imágenes
 Admite `.colpkg` y `.apkg` antiguos y modernos, incluidos paquetes comprimidos con Zstandard. Las colecciones modernas se leen con la biblioteca oficial de Anki; las antiguas conservan una representación básica de cloze.
@@ -65,7 +76,7 @@ Las imágenes están en la misma base que las tarjetas. `/api/decks/<id>/study` 
 
 Para ejecutar también las pruebas de PostgreSQL y migración, usar una base **exclusiva para pruebas**, configurada mediante `ANKIMIO_TEST_DATABASE_URL`. La suite ignora la variable de producción `DATABASE_URL` y elimina datos en su destino de pruebas. Nunca apuntarla a la base de uso personal.
 
-Las pruebas cubren paquetes exportados por Anki, imágenes, edición, transacciones, configuración de persistencia y TLS, y migración sin pérdida de identificadores. Las pruebas específicas de SQLite se omiten al probar PostgreSQL; las de migración PostgreSQL se omiten cuando no hay una base de pruebas.
+Las pruebas cubren paquetes exportados por Anki, imágenes, edición, transacciones, configuración de persistencia y TLS, migración sin pérdida de identificadores, intervalos de repaso, dominio en días distintos, reintentos, conflictos y deshacer persistente. Las pruebas específicas de SQLite se omiten al probar PostgreSQL; las de migración PostgreSQL se omiten cuando no hay una base de pruebas.
 
 ## Netlify
 Este servidor Flask necesita un alojamiento Python. Netlify puede servir una interfaz separada, pero subir este repositorio como sitio estático no ejecuta la API. La configuración incluida usa Render para la aplicación y PostgreSQL externo para la persistencia.

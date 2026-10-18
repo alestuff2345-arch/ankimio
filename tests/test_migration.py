@@ -41,6 +41,29 @@ class Migration(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'no está vacía'):migrate(path)
         with db() as c:self.assertEqual(c.execute('SELECT id FROM decks').fetchone()['id'],'existing')
 
+    def test_copy_preserves_optional_review_progress_and_undo(self):
+        import json
+        from datetime import date
+        from review import empty_progress,next_progress,undo_review
+        event='a'*32
+        previous=empty_progress()
+        state=next_progress(previous,'good',date(2026,1,1),event)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'study.db';self.source(path)
+            with sqlite3.connect(path) as source:
+                source.execute('CREATE TABLE card_progress(card_id TEXT,state TEXT)')
+                source.execute('CREATE TABLE review_events(id TEXT,card_id TEXT,rating TEXT,previous_state TEXT,undone INTEGER)')
+                source.execute('INSERT INTO card_progress VALUES (?,?)',('card-one',json.dumps(state)))
+                source.execute('INSERT INTO review_events VALUES (?,?,?,?,0)',(event,'card-one','good',json.dumps(previous)))
+            counts=migrate(path)
+            self.assertEqual(counts['card_progress'],1)
+            self.assertEqual(counts['review_events'],1)
+        with db() as c:
+            self.assertEqual(json.loads(c.execute('SELECT state FROM card_progress').fetchone()['state']),state)
+        restored=undo_review('deck-one','card-one',event,{})['progress']
+        self.assertEqual(restored['status'],'new')
+        self.assertIsNone(restored['revision'])
+
     def test_copy_error_rolls_back_all_destination_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'study.db';self.source(path,duplicate=True)
