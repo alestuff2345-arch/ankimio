@@ -1,4 +1,5 @@
 import io, json, os, random, re, sqlite3, tempfile, uuid, zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from flask import Flask, jsonify, request, render_template, send_file
 import zstandard
@@ -30,10 +31,18 @@ def health():
         c.execute('SELECT 1 FROM decks LIMIT 1').fetchone()
     return jsonify(status='ok')
 
+@contextmanager
 def db():
-    c = sqlite3.connect(DATA / 'study.db')
-    c.row_factory = sqlite3.Row
-    return c
+    c=sqlite3.connect(DATA / 'study.db',timeout=5)
+    c.row_factory=sqlite3.Row
+    try:
+        with c:yield c
+    finally:c.close()
+
+@app.errorhandler(sqlite3.OperationalError)
+def database_error(error):
+    app.logger.warning('Database operation failed: %s',error)
+    return jsonify(error='La base de datos no está disponible en este momento. Conserva tus cambios y vuelve a intentarlo.'),503
 
 with db() as c:
     c.executescript('CREATE TABLE IF NOT EXISTS media(id TEXT PRIMARY KEY,mime TEXT,content BLOB); CREATE TABLE IF NOT EXISTS decks(id TEXT PRIMARY KEY,name TEXT); CREATE TABLE IF NOT EXISTS cards(id TEXT PRIMARY KEY,deck TEXT,front TEXT,back TEXT);')

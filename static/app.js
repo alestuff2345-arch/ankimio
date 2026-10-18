@@ -59,7 +59,28 @@ function editedCardSide(original,text){
     if(text===plain(original))return original;
     return esc(text.trim()).replace(/\n/g,'<br>')+cardImages(original);
 }
-async function api(url,options){const r=await fetch(url,options);const d=await r.json();if(!r.ok)throw Error(d.error||'No se pudo completar la operación.');return d}
+async function api(url,options={},timeoutMs=30000){
+    const controller=new AbortController();let timedOut=false;
+    const cancel=()=>controller.abort();
+    if(options.signal?.aborted)controller.abort();
+    else options.signal?.addEventListener('abort',cancel,{once:true});
+    const timer=setTimeout(()=>{timedOut=true;controller.abort();},timeoutMs);
+    try{
+        const response=await fetch(url,{...options,signal:controller.signal});
+        const text=await response.text();let data;
+        try{data=JSON.parse(text);}catch{
+            throw Error(`El servidor no respondió correctamente (HTTP ${response.status}). Inténtalo de nuevo.`);
+        }
+        if(!response.ok){const error=Error(data.error||'No se pudo completar la operación.');error.status=response.status;throw error;}
+        return data;
+    }catch(error){
+        if(timedOut){const timeout=Error('El servidor está tardando demasiado. Inténtalo de nuevo.');timeout.code='TIMEOUT';throw timeout;}
+        if(controller.signal.aborted){const cancelled=Error('Se canceló la espera de la respuesta.');cancelled.code='CANCELLED';throw cancelled;}
+        throw error;
+    }finally{
+        clearTimeout(timer);options.signal?.removeEventListener('abort',cancel);
+    }
+}
 function notice(s){$('#notice').textContent=s}
 async function load(){try{const decks=await api('/api/decks');$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['⚓','☠','☀','♜'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p><div class="deck-actions"><button data-id="${d.id}" data-action="review">Repasar ↗</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>¡Tu aventura empieza aquí, nakama!</h3><p>Tu primer tesoro: crea un mazo o importa tus tarjetas de Anki.</p></div>'}catch(e){notice(e.message)}}
 $('#deleteall').onclick=()=>{
@@ -115,8 +136,8 @@ $('#addform').addEventListener('input',e=>{
     $('#cardstatus').textContent='';
 });
 $('#add').addEventListener('close',()=>{$('#cardstatus').textContent='';});
-$('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormData();form.append('file',e.target.files[0]);notice('Importando…');try{const r=await api('/api/import',{method:'POST',body:form});notice(`${r.count} tarjetas importadas en ${r.decks} mazos. ${r.warning}`);load()}catch(e){notice(e.message)}e.target.value=''};
-let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=false,editingDeck=null,afterCardEdit=null;
+$('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormData();form.append('file',e.target.files[0]);notice('Importando…');try{const r=await api('/api/import',{method:'POST',body:form},120000);notice(`${r.count} tarjetas importadas en ${r.decks} mazos. ${r.warning}`);load()}catch(e){notice(e.message)}e.target.value=''};
+let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=false,editingDeck=null,afterCardEdit=null,editRequest=null;
 const pageSize=25;
 async function openBrowser(deck,name){
     try{
@@ -154,8 +175,13 @@ function openCardEditor(card,deck,onSaved){
     $('#editimages').hidden=!$('#editimages').innerHTML;
     $('#editstatus').textContent='';$('#edit').showModal();
 }
-$('#canceledit').onclick=()=>$('#edit').close();
-$('#edit').addEventListener('cancel',e=>{if(savingEdit)e.preventDefault();});
+$('#canceledit').onclick=()=>{
+    if(savingEdit){editRequest?.abort();return;}
+    $('#edit').close();
+};
+$('#edit').addEventListener('cancel',e=>{
+    if(savingEdit){e.preventDefault();editRequest?.abort();}
+});
 $('#editform').oninput=e=>{if(e.target.matches('textarea'))e.target.setCustomValidity('');};
 $('#editform').onkeydown=e=>{
     if(e.ctrlKey && e.key==='Enter' && !e.isComposing){e.preventDefault();if(!e.repeat && !savingEdit)e.currentTarget.requestSubmit();}
@@ -168,12 +194,23 @@ $('#editform').onsubmit=async e=>{
     }
     const body={};
     for(const name of ['front','back'])body[name]=editedCardSide(card[name],form.elements[name].value);
-    savingEdit=true;form.querySelectorAll('button').forEach(b=>b.disabled=true);$('#editstatus').textContent='Guardando…';
+    savingEdit=true;editRequest=new AbortController();
+    const saveButton=form.querySelector('button[type="submit"]'),cancelButton=$('#canceledit');
+    saveButton.disabled=true;cancelButton.textContent='Dejar de esperar';
+    form.querySelectorAll('textarea').forEach(field=>field.readOnly=true);
+    $('#editstatus').textContent='Guardando…';
     try{
-        await api(`/api/decks/${editingDeck}/cards/${card.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        await api(`/api/decks/${editingDeck}/cards/${card.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:editRequest.signal},20000);
         Object.assign(card,body);$('#edit').close();if(afterCardEdit)afterCardEdit();notice('Cambios guardados.');
-    }catch(error){$('#editstatus').textContent=error.message;}
-    finally{savingEdit=false;form.querySelectorAll('button').forEach(b=>b.disabled=false);}
+    }catch(error){
+        const uncertain=['TIMEOUT','CANCELLED'].includes(error.code) || error instanceof TypeError;
+        $('#editstatus').textContent=uncertain
+            ? 'No se pudo confirmar el guardado. Tu texto se conserva aquí; puedes pulsar Guardar cambios para reintentar.'
+            : error.message;
+    }finally{
+        savingEdit=false;editRequest=null;saveButton.disabled=false;cancelButton.textContent='Cancelar';
+        form.querySelectorAll('textarea').forEach(field=>field.readOnly=false);
+    }
 };
 function shuffled(items){
     const result=[...items];

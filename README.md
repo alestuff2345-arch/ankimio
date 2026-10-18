@@ -45,3 +45,5 @@ Al exportar desde Anki, incluir los archivos multimedia. El importador lee tanto
 Los mazos importados antes de esta función deben importarse de nuevo desde el archivo original, ya que sus imágenes nunca se guardaron. Se avisa cuando una referencia no tiene archivo incluido o usa un formato no compatible. Las imágenes externas enlazadas y SVG no se cargan. Editar el texto de una tarjeta conserva sus imágenes existentes. En el plan gratuito de Render, las imágenes también son temporales junto con el resto de la base de datos.
 
 Si una imagen local falla al cargarse, se reintenta una vez y después se ofrece «Reintentar imagen». Esta recuperación no restaura archivos perdidos por reinicios del alojamiento gratuito; en ese caso hay que reimportar el paquete original.
+
+El editor limita la espera de guardado a 20 segundos. «Dejar de esperar» cancela la espera sin cerrar el editor; ante un error o una respuesta no confirmada conserva los campos y permite reintentar. No asume que cancelar la espera haya cancelado una escritura ya recibida por el servidor. Las conexiones SQLite se cierran al terminar cada operación y los bloqueos se devuelven como errores recuperables.

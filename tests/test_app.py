@@ -61,6 +61,34 @@ class Workflow(unittest.TestCase):
         self.assertEqual(saved['id'],card['id'])
         self.assertEqual(self.client.patch(f'/api/decks/{key}/cards/missing',json={'front':'A','back':'B'}).status_code,404)
 
+    def test_database_context_closes_and_rolls_back(self):
+        from app import db
+        with db() as connection:connection.execute('SELECT 1')
+        with self.assertRaises(sqlite3.ProgrammingError):connection.execute('SELECT 1')
+        with self.assertRaises(RuntimeError):
+            with db() as connection:
+                connection.execute('INSERT INTO decks VALUES (?,?)',('rollback-fixture','Rollback'))
+                raise RuntimeError('rollback')
+        with db() as connection:
+            self.assertIsNone(connection.execute('SELECT id FROM decks WHERE id=?',('rollback-fixture',)).fetchone())
+
+    def test_locked_database_returns_retryable_error_then_saves(self):
+        from app import DATA
+        key=self.client.post('/api/decks',json={'name':'Bloqueo'}).json['id']
+        self.client.post(f'/api/decks/{key}/cards',json={'front':'Original','back':'Respuesta'})
+        card=self.client.get(f'/api/decks/{key}/cards').json[0]
+        url=f"/api/decks/{key}/cards/{card['id']}"
+        lock=sqlite3.connect(DATA/'study.db')
+        try:
+            lock.execute('BEGIN IMMEDIATE')
+            r=self.client.patch(url,json={'front':'Corregida','back':'Respuesta'})
+            self.assertEqual(r.status_code,503)
+            self.assertIn('vuelve a intentarlo',r.json['error'])
+        finally:lock.rollback();lock.close()
+        self.assertEqual(self.client.get(f'/api/decks/{key}/cards').json[0]['front'],'Original')
+        self.assertEqual(self.client.patch(url,json={'front':'Corregida','back':'Respuesta'}).status_code,200)
+        self.assertEqual(self.client.get(f'/api/decks/{key}/cards').json[0]['front'],'Corregida')
+
     def test_invalid_package(self):
         r=self.client.post('/api/import',data={'file':(io.BytesIO(b'bad'),'bad.colpkg')})
         self.assertEqual(r.status_code,400)
