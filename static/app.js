@@ -1,4 +1,4 @@
-const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown,reviewHistory=[];
+const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown,reviewHistory=[],reviewDifficulty=new Map(),reviewFullDeck=[],reviewOnlyDifficult=false;
 function esc(s){const e=document.createElement('div');e.textContent=s;return e.innerHTML}
 function plain(s){const t=document.createElement('template');t.innerHTML=s;t.content.querySelectorAll('script,style').forEach(x=>x.remove());return t.content.textContent||''}
 const sessionImages=new Map();
@@ -122,7 +122,7 @@ $('#deleteform').onsubmit=async e=>{
     buttons.forEach(b=>b.disabled=true);$('#deletestatus').textContent='Eliminando…';
     try{
         const result=await api('/api/decks',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
-        clearSessionImages();selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;reviewHistory=[];
+        clearSessionImages();selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;reviewHistory=[];reviewDifficulty.clear();reviewFullDeck=[];reviewOnlyDifficult=false;
         $('#study').hidden=true;$('#study').innerHTML='';$('#library').hidden=false;
         $('#deleteconfirm').close();
         await load();notice(`Se eliminaron ${result.decks} mazos y ${result.cards} tarjetas.`);
@@ -279,15 +279,18 @@ $('#decks').onclick=async e=>{
         }else startReview(session);
     }catch(e){notice(e.message)}
 };
-function leave(){reviewHistory=[];$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
-function startReview(cards){
-    reviewDeck=[...cards];reviewQueue=shuffled(cards);reviewKnown=0;reviewHistory=[];showReview();
+function leave(){reviewHistory=[];reviewDifficulty.clear();$('#study').hidden=true;$('#library').hidden=false;notice('');load()}
+function startReview(cards,fullDeck=cards,onlyDifficult=false){
+    reviewFullDeck=[...fullDeck];reviewOnlyDifficult=onlyDifficult;
+    reviewDeck=[...cards];reviewQueue=shuffled(cards);reviewKnown=0;reviewHistory=[];reviewDifficulty.clear();showReview();
 }
 function undoReview(){
     if(exam || $('#study').hidden || !reviewHistory.length)return;
     const previous=reviewHistory.pop();
     if(previous.reinsertAt!==null)reviewQueue.splice(previous.reinsertAt,1);
     reviewQueue.unshift(previous.card);reviewKnown=previous.known;
+    if(previous.difficulty)reviewDifficulty.set(previous.card,previous.difficulty);
+    else reviewDifficulty.delete(previous.card);
     showReview();$('#reveal').click();
     const flashcard=$('#study .flashcard');flashcard.tabIndex=-1;flashcard.focus({preventScroll:true});
     notice('Última calificación deshecha. Puedes volver a calificar esta tarjeta.');
@@ -297,13 +300,15 @@ function undoReviewButton(){
 }
 function showReview(){
     if(!reviewQueue.length){
-        $('#study').innerHTML=`<div class="empty"><span>✳</span><h1>¡Ya te las sabes todas!</h1><p>Has marcado las ${reviewDeck.length} tarjetas como Bien o Fácil. Puedes repasar el mazo completo otra vez, sin esperar.</p><div class="actions"><button class="primary" id="again">Repasar todo de nuevo</button><button onclick="leave()">Mis mazos</button>${undoReviewButton()}</div></div>`;
+        const difficult=reviewDeck.filter(card=>reviewDifficulty.has(card));
+        $('#study').innerHTML=`<div class="empty"><span>✳</span><h1>${reviewOnlyDifficult?'¡Refuerzo completado!':'¡Ya te las sabes todas!'}</h1><p>Has marcado las ${reviewDeck.length} tarjetas de esta ronda como Bien o Fácil.</p><p>${difficult.length?`${difficult.length} tarjetas te costaron más: las marcaste como Otra vez o Difícil. Puedes repasar solo esas.`:'No marcaste ninguna tarjeta como Otra vez o Difícil en esta ronda.'}</p><div class="actions"><button class="primary" id="complicated" ${difficult.length?'':'disabled'}>Repasar las complicadas (${difficult.length})</button><button id="again">Repasar todo de nuevo</button><button onclick="leave()">Mis mazos</button>${undoReviewButton()}</div></div>`;
         $('#undoreview').onclick=undoReview;
-        $('#again').onclick=()=>startReview(reviewDeck);
+        $('#complicated').onclick=()=>{if(difficult.length)startReview(difficult,reviewFullDeck,true);};
+        $('#again').onclick=()=>startReview(reviewFullDeck);
         return;
     }
     const c=reviewQueue[0];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>Repaso libre</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><button id="editcurrent" type="button">Editar tarjeta</button></div><div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>${reviewOnlyDifficult?'Repaso de complicadas':'Repaso libre'}</h2><span>${reviewKnown} / ${reviewDeck.length} aprendidas · ${reviewQueue.length} pendientes</span></div><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><button id="editcurrent" type="button">Editar tarjeta</button></div><div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Dominada</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p>`;
     $('#undoreview').onclick=undoReview;
     $('#editcurrent').onclick=()=>{
         const wasRevealed=!$('#answer').hidden;
@@ -316,8 +321,9 @@ function showReview(){
     $('#ratings').onclick=e=>{
         const button=e.target.closest('button[data-rating]');if(!button || $('#answer').hidden)return;
         const card=reviewQueue.shift(), rating=button.dataset.rating;
-        const previous={card,known:reviewKnown,reinsertAt:null};
+        const previous={card,known:reviewKnown,reinsertAt:null,difficulty:reviewDifficulty.get(card)||0};
         if(rating==='again' || rating==='hard'){
+            reviewDifficulty.set(card,previous.difficulty+1);
             // Repeat within this session: sooner for Again, later for Hard.
             previous.reinsertAt=Math.min(rating==='again'?1:3,reviewQueue.length);
             reviewQueue.splice(previous.reinsertAt,0,card);
