@@ -5,7 +5,7 @@ from flask import Flask, jsonify, request, render_template, send_file
 import zstandard
 import hmac
 import psycopg
-from storage import DATA, db, initialize_storage
+from storage import DATA, db, initialize_storage, database_connection_hint
 from anki.collection import Collection
 from anki.errors import AnkiException
 from anki_media import unpack, read_images, rewrite_images
@@ -40,8 +40,8 @@ def database_error(error):
 
 try:
     initialize_storage()
-except psycopg.Error:
-    raise RuntimeError('No se pudo iniciar PostgreSQL. Revisa DATABASE_URL, la conexión Session pooler y su certificado TLS. No se usará una base temporal.') from None
+except psycopg.Error as error:
+    raise RuntimeError(database_connection_hint(error)+' No se usará una base temporal.') from None
 
 @app.get('/')
 def home(): return render_template('index.html')

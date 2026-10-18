@@ -39,7 +39,6 @@ def postgres_options():
         options['sslmode']='verify-full'
         options.setdefault('sslrootcert','system')
     options['connect_timeout']='10'
-    options['options']='-c search_path=ankimio -c statement_timeout=15000 -c lock_timeout=5000'
     return options
 
 @contextmanager
@@ -47,7 +46,13 @@ def db():
     if using_postgres():
         connection=psycopg.connect(**postgres_options(),row_factory=class_row(Row),prepare_threshold=None)
         try:
-            with connection.transaction(): yield PostgresConnection(connection)
+            with connection.transaction():
+                # Set these after connecting: managed poolers may reject
+                # PostgreSQL startup `options`. SET LOCAL is pooler-safe.
+                connection.execute('SET LOCAL search_path TO ankimio')
+                connection.execute("SET LOCAL statement_timeout = '15s'")
+                connection.execute("SET LOCAL lock_timeout = '5s'")
+                yield PostgresConnection(connection)
         finally: connection.close()
     else:
         if os.environ.get('RENDER')=='true' or os.environ.get('ANKIMIO_REQUIRE_DATABASE')=='1':
@@ -57,6 +62,25 @@ def db():
         try:
             with connection: yield connection
         finally: connection.close()
+
+def database_connection_hint(error):
+    """Return only fixed messages; never echo a DSN or driver credentials."""
+    detail=str(error).lower();state=getattr(error,'sqlstate',None)
+    if 'tenant or user not found' in detail:
+        return 'PG_USER: el pooler no reconoce el usuario. Copia el usuario completo de Connect → Session pooler, incluida la referencia del proyecto.'
+    if state=='28P01' or 'password authentication failed' in detail:
+        return 'PG_AUTH: la contraseña de la base no fue aceptada. Sustituye [YOUR-PASSWORD] y codifica los caracteres especiales de la contraseña en la URI.'
+    if 'could not translate host' in detail or 'failed to resolve' in detail or 'name or service not known' in detail:
+        return 'PG_DNS: no se encontró el servidor. Vuelve a copiar el hostname de Session pooler, sin espacios ni marcadores pendientes.'
+    if 'certificate' in detail or 'ssl' in detail or 'tls' in detail:
+        return 'PG_TLS: falló la conexión TLS o la verificación del certificado. Usa el Session pooler oficial y su certificado de confianza; no desactives la verificación.'
+    if 'timeout' in detail or 'timed out' in detail or 'network is unreachable' in detail or 'connection refused' in detail:
+        return 'PG_NETWORK: no se pudo alcanzar PostgreSQL. Comprueba que el proyecto esté activo y usa Session pooler compatible con IPv4, hostname terminado en pooler.supabase.com, puerto 5432.'
+    if state=='42501' or 'permission denied' in detail:
+        return 'PG_PERMISSIONS: el usuario no tiene permisos para crear o usar el esquema ankimio. Revisa los permisos de la conexión PostgreSQL.'
+    if 'unsupported startup parameter' in detail:
+        return 'PG_POOLER: el pooler rechazó un parámetro de conexión. Usa la URI de Session pooler sin opciones de inicio adicionales.'
+    return 'PG_CONNECTION: PostgreSQL rechazó la conexión o la inicialización. Revisa la URI de Session pooler, el estado del proyecto y los permisos del usuario.'
 
 def initialize_storage():
     with db() as connection:

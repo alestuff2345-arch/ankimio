@@ -68,3 +68,7 @@ Las pruebas cubren paquetes exportados por Anki, imágenes, edición, transaccio
 
 ## Netlify
 Este servidor Flask necesita un alojamiento Python. Netlify puede servir una interfaz separada, pero subir este repositorio como sitio estático no ejecuta la API. La configuración incluida usa Render para la aplicación y PostgreSQL externo para la persistencia.
+
+
+### Si Render no conecta con Supabase
+Los errores de inicio muestran un diagnóstico seguro: `PG_NETWORK` (conectividad, proyecto activo y pooler IPv4), `PG_AUTH` (contraseña de la base), `PG_USER` (usuario completo del pooler), `PG_DNS` (hostname), `PG_TLS` (certificado/TLS), `PG_PERMISSIONS` (permisos), o `PG_POOLER` (parámetros no aceptados). No se imprimen las credenciales del controlador. Los límites de consulta y el esquema se configuran mediante `SET LOCAL` después de conectar, en lugar de parámetros de inicio que algunos poolers rechazan.
