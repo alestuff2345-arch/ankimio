@@ -40,6 +40,11 @@ test('clearing rounds preserves preferences and other browser data',()=>{
  assert.equal(store.read('deck'),null);assert.equal(store.read('another'),null);
  assert.equal(storage.getItem('ankimio.spaced-review'),'off');assert.equal(storage.getItem('unrelated'),'keep');
 });
+test('removing one section deck preserves rounds from other sections',()=>{
+ const {store}=setup();store.save(round());store.save({...round(),deck:'other-section-deck'});
+ store.remove('deck');assert.equal(store.read('deck'),null);
+ assert.equal(store.read('other-section-deck').known,1);
+});
 test('unavailable or full storage fails safely without claiming a save',()=>{
  const {store}=setup({getItem(){throw Error('blocked');},setItem(){throw Error('quota');}});
  assert.equal(store.read('deck'),null);assert.equal(store.save(round()),false);assert.doesNotThrow(()=>store.clearAll());

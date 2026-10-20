@@ -22,6 +22,7 @@ const RoundStore=(()=>{
     return {
         read(deck){try{const s=JSON.parse(localStorage.getItem(prefix+deck));return valid(s) && s.deck===deck?s:null;}catch{return null;}},
         save(snapshot){try{if(!valid(snapshot))return false;localStorage.setItem(prefix+snapshot.deck,JSON.stringify(snapshot));return true;}catch{return false;}},
+        remove(deck){try{localStorage.removeItem(prefix+deck);}catch{}},
         clearAll(){try{Object.keys(localStorage).filter(k=>k.startsWith(prefix)).forEach(k=>localStorage.removeItem(k));}catch{}}
     };
 })();

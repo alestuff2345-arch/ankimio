@@ -124,3 +124,15 @@ def initialize_storage():
                            'id TEXT PRIMARY KEY,card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,'
                            'rating TEXT NOT NULL,previous_state TEXT NOT NULL,undone INTEGER NOT NULL DEFAULT 0)')
         connection.execute('CREATE INDEX IF NOT EXISTS review_events_card_index ON review_events(card_id)')
+        connection.execute('CREATE TABLE IF NOT EXISTS libraries(id TEXT PRIMARY KEY,name TEXT NOT NULL)')
+        connection.execute('INSERT INTO libraries (id,name) VALUES (?,?) ON CONFLICT (id) DO NOTHING',('main','Mis mazos'))
+        connection.execute('CREATE TABLE IF NOT EXISTS deck_libraries('
+                           'deck_id TEXT PRIMARY KEY REFERENCES decks(id) ON DELETE CASCADE,'
+                           'library_id TEXT NOT NULL REFERENCES libraries(id))')
+        connection.execute('CREATE INDEX IF NOT EXISTS deck_libraries_library_index ON deck_libraries(library_id)')
+        assign_unmapped_decks(connection)
+
+def assign_unmapped_decks(connection):
+    connection.execute('INSERT INTO deck_libraries (deck_id,library_id) '
+                       'SELECT id,? FROM decks WHERE NOT EXISTS '
+                       '(SELECT 1 FROM deck_libraries WHERE deck_id=decks.id)',('main',))

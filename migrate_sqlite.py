@@ -7,7 +7,7 @@ import argparse
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from storage import db, initialize_storage, using_postgres
+from storage import db, initialize_storage, using_postgres, assign_unmapped_decks
 
 def migrate(source_path):
     if not using_postgres():raise RuntimeError('Configura DATABASE_URL antes de migrar.')
@@ -18,12 +18,16 @@ def migrate(source_path):
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as source,db() as target:
         source.execute('BEGIN')
         target.execute('SELECT pg_advisory_xact_lock(18001742)')
-        for table in ('decks','cards','media','card_progress','review_events'):
+        for table in ('decks','cards','media','card_progress','review_events','deck_libraries'):
             if target.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]:
                 raise RuntimeError('La base de destino no está vacía. La migración se canceló sin sobrescribir datos.')
+        if target.execute('SELECT 1 FROM libraries WHERE id<>?',('main',)).fetchone():
+            raise RuntimeError('La base de destino no está vacía. La migración se canceló sin sobrescribir datos.')
         existing={r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not {'decks','cards'}<=existing:raise RuntimeError('El archivo no es una base de Ankimio.')
         tables=[('decks','id,name'),('media','id,mime,content'),('cards','id,deck,front,back')]
+        if 'libraries' in existing:tables.insert(0,('libraries','id,name'))
+        if 'deck_libraries' in existing:tables.append(('deck_libraries','deck_id,library_id'))
         for table,columns in (('card_progress','card_id,state'),('review_events','id,card_id,rating,previous_state,undone')):
             if table in existing:tables.append((table,columns))
         for table,columns in tables:
@@ -32,8 +36,10 @@ def migrate(source_path):
             cursor=source.execute(f'SELECT {columns} FROM {table}')
             placeholders=','.join('?' for _ in columns.split(','))
             while batch:=cursor.fetchmany(250):
-                target.executemany(f'INSERT INTO {table} ({columns}) VALUES ({placeholders})',batch)
+                conflict=' ON CONFLICT (id) DO UPDATE SET name=excluded.name' if table=='libraries' else ''
+                target.executemany(f'INSERT INTO {table} ({columns}) VALUES ({placeholders})'+conflict,batch)
                 counts[table]+=len(batch)
+        assign_unmapped_decks(target)
     return counts
 
 if __name__=='__main__':

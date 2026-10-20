@@ -52,8 +52,33 @@ def home(): return render_template('index.html')
 def decks():
     today=today_in_zone(request.args.get('timezone','UTC'))
     with db() as c:
+        library=library_key(c,request.args.get('library','main'))
         summaries=deck_summaries(c,today)
-        return jsonify([dict(r,review=summaries.get(r['id'],{})) for r in c.execute('SELECT decks.*,count(cards.id) AS count FROM decks LEFT JOIN cards ON cards.deck=decks.id GROUP BY decks.id ORDER BY name')])
+        return jsonify([dict(r,review=summaries.get(r['id'],{})) for r in c.execute(
+            'SELECT decks.*,count(cards.id) AS count FROM decks '
+            'LEFT JOIN deck_libraries ON deck_libraries.deck_id=decks.id '
+            'LEFT JOIN cards ON cards.deck=decks.id '
+            'WHERE COALESCE(deck_libraries.library_id,\'main\')=? GROUP BY decks.id ORDER BY name',(library,))])
+
+def library_key(connection,value):
+    if not isinstance(value,str) or not connection.execute('SELECT 1 FROM libraries WHERE id=?',(value,)).fetchone():
+        raise ReviewError('La sección ya no existe. Vuelve a cargar tus secciones.',404)
+    return value
+
+@app.get('/api/libraries')
+def libraries():
+    with db() as c:
+        return jsonify([dict(r) for r in c.execute("SELECT id,name FROM libraries ORDER BY CASE WHEN id='main' THEN 0 ELSE 1 END,name,id")])
+
+@app.post('/api/libraries')
+def create_library():
+    body=request.get_json(silent=True)
+    name=body.get('name') if isinstance(body,dict) else None
+    if not isinstance(name,str) or not 1<=len(name.strip())<=80:
+        return jsonify(error='Escribe un nombre de sección de entre 1 y 80 caracteres.'),400
+    key=uuid.uuid4().hex
+    with db() as c:c.execute('INSERT INTO libraries (id,name) VALUES (?,?)',(key,name.strip()))
+    return jsonify(id=key,name=name.strip()),201
 
 @app.errorhandler(ReviewError)
 def invalid_review(error):
@@ -73,7 +98,10 @@ def create():
     name = str(body.get('name', '')).strip()
     if not name: return jsonify(error='Escribe un nombre para el mazo.'), 400
     key = uuid.uuid4().hex
-    with db() as c: c.execute('INSERT INTO decks VALUES (?,?)', (key,name))
+    with db() as c:
+        library=library_key(c,body.get('library','main'))
+        c.execute('INSERT INTO decks VALUES (?,?)', (key,name))
+        c.execute('INSERT INTO deck_libraries VALUES (?,?)',(key,library))
     return jsonify(id=key), 201
 
 @app.delete('/api/decks')
@@ -82,9 +110,21 @@ def delete_all_decks():
     if not isinstance(body,dict) or body.get('confirm') is not True:
         return jsonify(error='Confirma que deseas eliminar todos los mazos y sus tarjetas.'),400
     with db() as c:
-        cards=c.execute('DELETE FROM cards').rowcount
-        decks=c.execute('DELETE FROM decks').rowcount
-        c.execute('DELETE FROM media')
+        library=library_key(c,request.args.get('library','main'))
+        members="SELECT decks.id FROM decks LEFT JOIN deck_libraries ON deck_libraries.deck_id=decks.id WHERE COALESCE(deck_libraries.library_id,'main')=?"
+        removed_media=set()
+        for card in c.execute(f'SELECT front,back FROM cards WHERE deck IN ({members})',(library,)):
+            for side in ('front','back'):removed_media.update(re.findall(r'/media/([0-9a-f]{32})',card[side]))
+        cards=c.execute(f'DELETE FROM cards WHERE deck IN ({members})',(library,)).rowcount
+        decks=c.execute(f'DELETE FROM decks WHERE id IN ({members})',(library,)).rowcount
+        # Other sections may still use these assets, including shared references.
+        referenced=set()
+        for card in c.execute('SELECT front,back FROM cards'):
+            for side in ('front','back'):referenced.update(re.findall(r'/media/([0-9a-f]{32})',card[side]))
+        if not c.execute('SELECT 1 FROM cards LIMIT 1').fetchone():c.execute('DELETE FROM media')
+        else:
+            unused=[(token,) for token in removed_media-referenced]
+            if unused:c.executemany('DELETE FROM media WHERE id=?',unused)
     return jsonify(decks=decks,cards=cards)
 
 @app.post('/api/decks/<key>/cards')
@@ -201,6 +241,7 @@ def card_image(token):
 
 @app.post('/api/import')
 def import_deck():
+    with db() as c:library=library_key(c,request.form.get('library','main'))
     upload=request.files.get('file')
     if not upload or not upload.filename.lower().endswith(('.colpkg','.apkg')):
         return jsonify(error='Selecciona un archivo .colpkg o .apkg.'),400
@@ -226,8 +267,10 @@ def import_deck():
             pending.append((uuid.uuid4().hex,key,front,back))
         if not pending: raise ValueError('El paquete no contiene tarjetas.')
         with db() as c:
+            library_key(c,library)
             c.executemany('INSERT INTO media VALUES (?,?,?)',assets)
             c.executemany('INSERT INTO decks VALUES (?,?)',imported.items())
+            c.executemany('INSERT INTO deck_libraries VALUES (?,?)',[(key,library) for key in imported])
             c.executemany('INSERT INTO cards VALUES (?,?,?,?)',pending)
         warning='Se importaron las tarjetas y sus imágenes. El audio y los estilos personalizados aún no se admiten.'
         if missing:warning+=f' {missing} referencias a imágenes no estaban incluidas o usan un formato no compatible.'

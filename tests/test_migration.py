@@ -13,6 +13,7 @@ class Migration(unittest.TestCase):
     def setUp(self):
         with db() as c:
             for table in ('cards','media','decks'):c.execute(f'DELETE FROM {table}')
+            c.execute('DELETE FROM libraries WHERE id<>?',('main',))
 
     def source(self,path,duplicate=False):
         c=sqlite3.connect(path)
@@ -63,6 +64,21 @@ class Migration(unittest.TestCase):
         restored=undo_review('deck-one','card-one',event,{})['progress']
         self.assertEqual(restored['status'],'new')
         self.assertIsNone(restored['revision'])
+
+    def test_copy_preserves_sections_and_deck_membership(self):
+        from storage import initialize_storage
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'study.db';self.source(path)
+            with sqlite3.connect(path) as source:
+                source.executescript('CREATE TABLE libraries(id TEXT,name TEXT); CREATE TABLE deck_libraries(deck_id TEXT,library_id TEXT);')
+                source.executemany('INSERT INTO libraries VALUES (?,?)',[('main','Mis mazos'),('medicine','Medicina')])
+                source.execute('INSERT INTO deck_libraries VALUES (?,?)',('deck-one','medicine'))
+            counts=migrate(path)
+            self.assertEqual(counts['libraries'],2);self.assertEqual(counts['deck_libraries'],1)
+        initialize_storage()
+        with db() as c:
+            self.assertEqual(c.execute('SELECT library_id FROM deck_libraries WHERE deck_id=?',('deck-one',)).fetchone()['library_id'],'medicine')
+            self.assertEqual(c.execute('SELECT name FROM libraries WHERE id=?',('medicine',)).fetchone()['name'],'Medicina')
 
     def test_copy_error_rolls_back_all_destination_writes(self):
         with tempfile.TemporaryDirectory() as tmp:

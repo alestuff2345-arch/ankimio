@@ -1,6 +1,43 @@
 const $=s=>document.querySelector(s);let selected,session,index,exam,answers,examPool,reviewDeck,reviewQueue,reviewKnown,reviewHistory=[],reviewDifficulty=new Map(),reviewFullDeck=[],reviewOnlyDifficult=false;
 let spacedEnabled=true,reviewTracking=false,reviewMode='all',reviewBusy=false,pendingRating=null,retryReviewAction=null;
 let reviewRoundActive=false,pendingUndo=null;
+let activeLibrary='main',libraryNames=new Map([['main','Mis mazos']]);
+try{activeLibrary=localStorage.getItem('ankimio.library') || 'main';}catch{}
+function libraryQuery(library=activeLibrary){return 'library='+encodeURIComponent(library);}
+function showLibraryNavigation(){
+    $('#libraries').innerHTML=[...libraryNames].map(([id,name])=>`<button type="button" data-library="${esc(id)}" ${id===activeLibrary?'aria-current="page"':''}>${id==='main'?'▦':'◈'} <span>${esc(name)}</span></button>`).join('');
+    $('#librarycrumb').textContent='Noche / '+libraryNames.get(activeLibrary);
+    $('#libraryheading').textContent=libraryNames.get(activeLibrary);
+    try{localStorage.setItem('ankimio.library',activeLibrary);}catch{}
+}
+async function initializeLibraries(){
+    try{
+        const libraries=await api('/api/libraries');libraryNames=new Map(libraries.map(l=>[l.id,l.name]));
+        if(!libraryNames.has(activeLibrary))activeLibrary='main';
+        showLibraryNavigation();await load();
+    }catch(error){notice(error.message);}
+}
+async function selectLibrary(id){
+    if(!libraryNames.has(id))return;
+    if(reviewBusy || savingEdit || savingCard || deletingDecks)return notice('Espera a que termine el guardado para cambiar de sección.');
+    if(!$('#study').hidden)leave();
+    activeLibrary=id;selected=null;clearSessionImages();showLibraryNavigation();notice('');await load();
+}
+$('#libraries').onclick=e=>{const button=e.target.closest('button[data-library]');if(button)selectLibrary(button.dataset.library);};
+$('#newlibrary').onclick=()=>{if(reviewBusy || savingEdit || savingCard || deletingDecks)return notice('Espera a que termine el guardado para crear una sección.');$('#librarystatus').textContent='';$('#libraryform').reset();$('#librarydialog').showModal();};
+let savingLibrary=false;
+$('#libraryform').onsubmit=async e=>{
+    e.preventDefault();if(savingLibrary)return;
+    const name=e.currentTarget.elements.name.value.trim();
+    if(!name){$('#librarystatus').textContent='Escribe un nombre para la sección.';return;}
+    savingLibrary=true;const button=e.currentTarget.querySelector('button[type="submit"]');button.disabled=true;
+    $('#librarystatus').textContent='Creando sección…';
+    try{
+        const library=await api('/api/libraries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+        libraryNames.set(library.id,library.name);showLibraryNavigation();$('#librarydialog').close();await selectLibrary(library.id);
+    }catch(error){$('#librarystatus').textContent=error.message;}
+    finally{savingLibrary=false;button.disabled=false;}
+};
 function savedRound(deck){const s=RoundStore.read(deck);return s && (s.queue.length || s.pendingUndo || s.pendingRating)?s:null;}
 function resumeButtonHtml(deck){
     const s=savedRound(deck);
@@ -170,8 +207,9 @@ async function deckCards(key){
     return bundle.cards;
 }
 function notice(s){$('#notice').textContent=s}
-async function load(){try{const decks=await api('/api/decks?'+timezoneQuery);$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['◈','✦','◉','⬡'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p>${deckProgressHtml(d)}${resumeButtonHtml(d.id)}<div class="deck-actions"><button data-id="${d.id}" data-action="${savedRound(d.id)?'restart':'review'}">${savedRound(d.id)?'Empezar de nuevo':spacedEnabled?'Repasar todo ↗':'Repasar ↗'}</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>Tu próxima idea empieza aquí.</h3><p>Crea un mazo o importa tus tarjetas de Anki para empezar.</p></div>'}catch(e){notice(e.message)}}
+async function load(){const library=activeLibrary;try{const decks=await api('/api/decks?'+timezoneQuery+'&'+libraryQuery(library));if(library!==activeLibrary)return;$('#total').textContent=`(${decks.length})`;$('#deleteall').disabled=decks.length===0;$('#decks').innerHTML=decks.length?decks.map((d,i)=>`<article><div class="deck-icon">${['◈','✦','◉','⬡'][i%4]}</div><h3>${esc(d.name)}</h3><p>${d.count} tarjetas · Sin límite diario</p>${deckProgressHtml(d)}${resumeButtonHtml(d.id)}<div class="deck-actions"><button data-id="${d.id}" data-action="${savedRound(d.id)?'restart':'review'}">${savedRound(d.id)?'Empezar de nuevo':spacedEnabled?'Repasar todo ↗':'Repasar ↗'}</button><button data-id="${d.id}" data-action="exam">Simulacro</button><button data-id="${d.id}" data-action="browse">Explorar</button><button data-id="${d.id}" data-action="add" aria-label="Añadir tarjeta">＋</button></div></article>`).join(''):'<div class="empty"><span>✧</span><h3>Tu próxima idea empieza aquí.</h3><p>Crea un mazo o importa tus tarjetas de Anki para empezar.</p></div>'}catch(e){notice(e.message)}}
 $('#deleteall').onclick=()=>{
+    $('#deletetitle').textContent='¿Eliminar todos los mazos de «'+libraryNames.get(activeLibrary)+'»?';
     $('#deletestatus').textContent='';$('#deleteconfirm').showModal();
 };
 $('#canceldelete').onclick=()=>$('#deleteconfirm').close();
@@ -183,8 +221,9 @@ $('#deleteform').onsubmit=async e=>{
     const buttons=[...e.currentTarget.querySelectorAll('button')];
     buttons.forEach(b=>b.disabled=true);$('#deletestatus').textContent='Eliminando…';
     try{
-        const result=await api('/api/decks',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
-        reviewRoundActive=false;pendingUndo=null;RoundStore.clearAll();
+        const ids=new Set([...$('#decks').querySelectorAll('[data-id]')].map(b=>b.dataset.id));
+        const result=await api('/api/decks?'+libraryQuery(),{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});
+        reviewRoundActive=false;pendingUndo=null;ids.forEach(id=>RoundStore.remove(id));
         clearSessionImages();selected=null;session=[];answers=[];examPool=[];reviewDeck=[];reviewQueue=[];reviewKnown=0;reviewHistory=[];reviewDifficulty.clear();reviewFullDeck=[];reviewOnlyDifficult=false;
         $('#study').hidden=true;$('#study').innerHTML='';$('#library').hidden=false;
         $('#deleteconfirm').close();
@@ -192,7 +231,7 @@ $('#deleteform').onsubmit=async e=>{
     }catch(error){$('#deletestatus').textContent=error.message;}
     finally{deletingDecks=false;buttons.forEach(b=>b.disabled=false);}
 };
-$('#newform').onsubmit=async e=>{e.preventDefault();try{await api('/api/decks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});$('#new').close();e.target.reset();load()}catch(e){notice(e.message)}};
+$('#newform').onsubmit=async e=>{e.preventDefault();try{await api('/api/decks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...Object.fromEntries(new FormData(e.target)),library:activeLibrary})});$('#new').close();e.target.reset();load()}catch(e){notice(e.message)}};
 let savingCard=false;
 $('#addform').addEventListener('keydown',e=>{
     if(e.ctrlKey && e.key==='Enter' && !e.isComposing){
@@ -225,7 +264,7 @@ $('#addform').addEventListener('input',e=>{
     $('#cardstatus').textContent='';
 });
 $('#add').addEventListener('close',()=>{$('#cardstatus').textContent='';});
-$('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormData();form.append('file',e.target.files[0]);notice('Importando…');try{const r=await api('/api/import',{method:'POST',body:form},120000);notice(`${r.count} tarjetas importadas en ${r.decks} mazos. ${r.warning}`);load()}catch(e){notice(e.message)}e.target.value=''};
+$('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormData(),library=activeLibrary,name=libraryNames.get(library);form.append('file',e.target.files[0]);form.append('library',library);notice('Importando en «'+name+'»…');try{const r=await api('/api/import',{method:'POST',body:form},120000);notice(`${r.count} tarjetas importadas en ${r.decks} mazos de «${name}». ${r.warning}`);load()}catch(e){notice(e.message)}e.target.value=''};
 let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=false,editingDeck=null,afterCardEdit=null,editRequest=null;
 const pageSize=25;
 async function openBrowser(deck,name){
@@ -530,4 +569,4 @@ function results(){
         return `<article class="result ${ok?'result-correct':'result-wrong'}"><span class="result-verdict">${ok?'✓ Correcta':'✕ Incorrecta'}</span><div class="result-question"><strong>${i+1}.</strong> ${cardHtml(c.front)}</div><div><strong>Tu respuesta (${'ABCD'[marked]}):</strong> ${cardHtml(c.choices[marked])}</div><div><strong>Clave correcta (${'ABCD'[right]}):</strong> ${cardHtml(c.choices[right])}</div></article>`;
     }).join('')}<button onclick="leave()">Volver a mis mazos</button>`;
 }
-load();
+initializeLibraries();

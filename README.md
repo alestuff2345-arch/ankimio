@@ -2,7 +2,7 @@
 Aplicación personal en español con tema Noche, fondo oscuro y acentos violetas para crear e importar mazos, repasar sin límites de tiempo y hacer simulacros.
 
 ## Datos permanentes en Render y Supabase
-En producción, **mazos, tarjetas, ediciones e imágenes se guardan en PostgreSQL** mediante `DATABASE_URL`. Se usa el esquema `ankimio`, separado del esquema público de Supabase. Render puede reiniciarse sin eliminar esos datos. Esto requiere que la base externa esté configurada y disponible; el código por sí solo no crea una cuenta ni un proyecto de Supabase.
+En producción, **secciones, mazos, tarjetas, ediciones e imágenes se guardan en PostgreSQL** mediante `DATABASE_URL`. Se usa el esquema `ankimio`, separado del esquema público de Supabase. Render puede reiniciarse sin eliminar esos datos. Esto requiere que la base externa esté configurada y disponible; el código por sí solo no crea una cuenta ni un proyecto de Supabase.
 
 La aplicación rechaza iniciar con almacenamiento temporal cuando está en Render (`RENDER=true`) o `ANKIMIO_REQUIRE_DATABASE=1`. Si PostgreSQL falla, muestra un error y **no cambia silenciosamente a SQLite**.
 
@@ -41,6 +41,7 @@ python -m venv .venv
 También se puede desarrollar con PostgreSQL configurando `DATABASE_URL`. Las tablas se crean automáticamente sin borrar las existentes. En producción se ejecuta Gunicorn, según `render.yaml`.
 
 ## Funciones
+- Crear secciones con nombre propio desde la barra lateral mediante «Nueva sección» (botón ＋ en móvil). «Mis mazos» conserva todos los mazos anteriores. Cada sección tiene su propia biblioteca y las mismas funciones de importación, creación, edición, repaso, continuación y simulacros.
 - Crear mazos y tarjetas.
 - Crear tarjetas consecutivamente con Ctrl + Enter.
 - Explorar cada mazo, buscar por pregunta o respuesta, navegar 25 tarjetas por página y editar. También se puede editar la tarjeta dentro del repaso sin perder el progreso.
@@ -50,13 +51,20 @@ También se puede desarrollar con PostgreSQL configurando `DATABASE_URL`. Las ta
 - Al terminar una ronda aparece «Repasar las complicadas»: incluye únicamente las tarjetas marcadas como Otra vez o Difícil en esa ronda, aunque luego se hayan acertado. La selección se recalcula al terminar cada ronda de refuerzo. Deshacer una calificación también deshace su marca de dificultad. «Repasar todo de nuevo» recupera siempre el mazo completo, incluso después de un refuerzo. Este seguimiento se conserva al continuar una ronda guardada.
 - Ctrl + Z o «Deshacer calificación» restaura la tarjeta anterior y su progreso, incluso al terminar la sesión. Si el seguimiento está activado, también restaura la fecha recomendada y el dominio guardados. No interfiere con la edición de texto. La cola, el orden, la respuesta revelada y el historial para deshacer se guardan automáticamente en el navegador; los mazos, ediciones y progreso de aprendizaje se guardan en la base configurada.
 - Simulacros con hasta cuatro alternativas basadas en otras respuestas del mismo mazo; requieren al menos dos respuestas distintas. Calificación automática y claves al terminar. Espacio avanza después de marcar una alternativa. Los resultados del simulacro son temporales.
-- Eliminar todos los mazos y sus imágenes, previa confirmación.
+- Eliminar los mazos de la sección abierta, previa confirmación que muestra su nombre. Se conservan las otras secciones, sus tarjetas, sus imágenes en uso y sus rondas guardadas.
 - Guardado del editor con límite de espera, opción de dejar de esperar, conservación del texto ante errores y reintento.
+
+### Secciones independientes
+Las secciones se guardan en `libraries` y su relación con los mazos en `deck_libraries`. La actualización asigna los mazos anteriores a «Mis mazos» sin cambiar identificadores, tarjetas, imágenes o progreso. Una importación `.colpkg`/`.apkg` coloca todos sus mazos e imágenes en la sección en la que empezó, incluso si se cambia de sección mientras se carga.
+
+`GET/POST /api/libraries` permite listar y crear secciones. `GET/DELETE /api/decks?library=<id>`, `POST /api/decks` con `library` y el campo `library` de `/api/import` seleccionan la sección; si se omite, se usa «Mis mazos». Son divisiones de organización de la misma aplicación personal, no cuentas con permisos separados. La migración SQLite/PostgreSQL conserva las secciones y asignaciones cuando existen y admite las bases antiguas.
+
+El navegador recuerda la última sección abierta. Cambiar de sección conserva el repaso pendiente; importar y crear mazos en una sección no modifica las demás. En móvil, las secciones se desplazan horizontalmente y el botón ＋ permanece accesible.
 
 ### Continuar una ronda
 La biblioteca muestra «Continuar repaso» cuando hay una ronda pendiente en ese navegador. Conserva el orden exacto, las tarjetas repetidas, las completadas, la selección de complicadas, el modo de repaso y Ctrl + Z, incluso al recargar o cerrar la pestaña. «Empezar de nuevo» pide confirmación antes de reemplazar la ronda pendiente. Se puede dejar una ronda pendiente en cada mazo; explorar tarjetas o hacer un simulacro no la reemplaza.
 
-La ronda se guarda después de cada cambio y antes de enviar una calificación o deshacerla. Al continuar una solicitud interrumpida, se reintenta con su identificador original para evitar duplicarla. Las tarjetas, sus ediciones y las imágenes se vuelven a cargar desde la base; el navegador solo guarda identificadores y el estado de la ronda. El guardado de rondas también funciona con el seguimiento espaciado desactivado. Eliminar todos los mazos elimina sus rondas locales.
+La ronda se guarda después de cada cambio y antes de enviar una calificación o deshacerla. Al continuar una solicitud interrumpida, se reintenta con su identificador original para evitar duplicarla. Las tarjetas, sus ediciones y las imágenes se vuelven a cargar desde la base; el navegador solo guarda identificadores y el estado de la ronda. El guardado de rondas también funciona con el seguimiento espaciado desactivado. Eliminar los mazos de una sección elimina sus rondas locales y conserva las de las otras secciones.
 
 Este guardado usa `localStorage` del mismo navegador y dirección de la aplicación. No se transfiere a otros dispositivos ni sobrevive al borrado de los datos del navegador; en modo privado depende de que el navegador los conserve. Si el almacenamiento está bloqueado o lleno, la aplicación lo indica. Las rondas perdidas antes de esta actualización no se pueden reconstruir. Los simulacros siguen siendo temporales.
 
@@ -82,7 +90,7 @@ Las imágenes están en la misma base que las tarjetas. `/api/decks/<id>/study` 
 node --test tests/test_rounds.cjs
 ```
 
-La prueba de navegador opcional `node tests/test_rounds_browser.cjs` requiere Playwright, Chromium en `/usr/bin/chromium` y el entorno `.venv`. Crea su propia base temporal y servidor local en un puerto libre; comprueba la recuperación después de reiniciar ese proceso, recargar, editar, hacer un simulacro y perder una respuesta de guardado. No usa la conexión de producción.
+La prueba de navegador opcional `node tests/test_rounds_browser.cjs` requiere Playwright, Chromium en `/usr/bin/chromium` y el entorno `.venv`. Crea su propia base temporal y servidor local en un puerto libre; comprueba la recuperación después de reiniciar ese proceso, recargar, editar, hacer un simulacro y perder una respuesta de guardado. No usa la conexión de producción. `node tests/test_libraries_browser.cjs` comprueba además la creación de secciones, importación real con imágenes, edición, simulacros, eliminación limitada a una sección y conservación de las rondas al navegar.
 
 Para ejecutar también las pruebas de PostgreSQL y migración, usar una base **exclusiva para pruebas**, configurada mediante `ANKIMIO_TEST_DATABASE_URL`. La suite ignora la variable de producción `DATABASE_URL` y elimina datos en su destino de pruebas. Nunca apuntarla a la base de uso personal.
 
