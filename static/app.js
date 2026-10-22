@@ -428,7 +428,7 @@ function lockReviewControls(){
         reviewBusy=false;
         controls.forEach(([b,disabled])=>{if(b.isConnected)b.disabled=disabled;});
         if(pendingRating || retryReviewAction){
-            document.querySelectorAll('#ratings button,#undoreview,#editcurrent,#again,#complicated').forEach(b=>b.disabled=true);
+            document.querySelectorAll('#ratings button,#undoreview,#editcurrent,#deletecurrent,#again,#complicated').forEach(b=>b.disabled=true);
         }
     };
 }
@@ -480,6 +480,28 @@ function roundProgressHtml(){
 function undoReviewButton(){
     return `<button id="undoreview" type="button" aria-keyshortcuts="Control+z Meta+z" ${reviewHistory.length?'':'disabled'}>↶ Deshacer calificación · Ctrl + Z</button>`;
 }
+async function deleteCurrentCard(){
+    if(reviewBusy || pendingRating || pendingUndo || retryReviewAction || !reviewQueue.length)return;
+    if(!confirm('¿Eliminar esta tarjeta? Se borrará también su progreso. Esta acción no se puede deshacer.'))return;
+    const card=reviewQueue[0],restore=lockReviewControls();
+    $('#reviewstatus').textContent='Eliminando tarjeta…';
+    try{
+        try{await api(`/api/decks/${selected}/cards/${card.id}`,{method:'DELETE'},20000);}
+        catch(error){if(error.status!==404)throw error;}
+        reviewFullDeck=reviewFullDeck.filter(c=>c.id!==card.id);
+        reviewDeck=reviewDeck.filter(c=>c.id!==card.id);
+        reviewQueue=reviewQueue.filter(c=>c.id!==card.id);
+        reviewDifficulty.delete(card);
+        // Earlier undo positions refer to the queue before removal.
+        reviewHistory=[];reviewKnown=reviewDeck.length-reviewQueue.length;
+        RoundStore.remove(selected);
+        if(!reviewDeck.length){
+            reviewRoundActive=false;restore();leave();
+        }else showReview();
+        notice('Tarjeta eliminada. El historial para deshacer calificaciones de esta ronda se ha reiniciado.');
+    }catch(error){$('#reviewstatus').textContent='No se pudo confirmar la eliminación. Puedes reintentarlo. '+error.message;}
+    finally{restore();}
+}
 function showReview(){
     if(!reviewQueue.length){
         const difficult=reviewDeck.filter(card=>reviewDifficulty.has(card));
@@ -491,8 +513,9 @@ function showReview(){
         return;
     }
     const c=reviewQueue[0];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>${reviewOnlyDifficult?'Repaso de complicadas':reviewMode==='recommended'?'Repaso recomendado':'Repaso libre'}</h2><span>${reviewKnown} / ${reviewDeck.length} completadas · ${reviewQueue.length} pendientes</span></div><p class="hint">Tu ronda se guarda automáticamente en este navegador.</p><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><button id="editcurrent" type="button">Editar tarjeta</button></div>${progressHtml(c)}<div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Me resultó fácil</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p><div id="reviewstatus" role="status" aria-live="polite"></div>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>${reviewOnlyDifficult?'Repaso de complicadas':reviewMode==='recommended'?'Repaso recomendado':'Repaso libre'}</h2><span>${reviewKnown} / ${reviewDeck.length} completadas · ${reviewQueue.length} pendientes</span></div><p class="hint">Tu ronda se guarda automáticamente en este navegador.</p><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><div class="card-tools"><button id="editcurrent" type="button">Editar tarjeta</button><button id="deletecurrent" class="danger" type="button">Eliminar tarjeta</button></div></div>${progressHtml(c)}<div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Me resultó fácil</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p><div id="reviewstatus" role="status" aria-live="polite"></div>`;
     $('#undoreview').onclick=undoReview;
+    $('#deletecurrent').onclick=deleteCurrentCard;
     $('#editcurrent').onclick=()=>{
         const wasRevealed=!$('#answer').hidden;
         openCardEditor(c,selected,()=>{showReview();if(wasRevealed)$('#reveal').click();});

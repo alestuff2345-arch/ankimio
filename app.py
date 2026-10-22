@@ -168,6 +168,16 @@ def study_bundle(key):
     response.headers['Cache-Control']='private, no-store'
     return response
 
+@app.delete('/api/decks/<key>/cards/<card_id>')
+def delete_card(key,card_id):
+    with db() as c:
+        if not c.execute('SELECT 1 FROM cards WHERE id=? AND deck=?',(card_id,key)).fetchone():
+            return jsonify(error='La tarjeta ya no existe en este mazo.'),404
+        c.execute('DELETE FROM review_events WHERE card_id=?',(card_id,))
+        c.execute('DELETE FROM card_progress WHERE card_id=?',(card_id,))
+        c.execute('DELETE FROM cards WHERE id=? AND deck=?',(card_id,key))
+    return jsonify(ok=True)
+
 @app.patch('/api/decks/<key>/cards/<card_id>')
 def edit_card(key,card_id):
     body=request.get_json(silent=True)

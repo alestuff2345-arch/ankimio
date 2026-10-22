@@ -6,6 +6,26 @@ from app import app
 
 class Workflow(unittest.TestCase):
     def setUp(self): self.client=app.test_client()
+    def test_delete_card_is_scoped_and_persistent(self):
+        from app import db
+        client=self.client
+        deck=client.post('/api/decks',json={'name':'Eliminar'}).json['id']
+        other=client.post('/api/decks',json={'name':'Conservar'}).json['id']
+        for front in ('Eliminar','Conservar'):
+            client.post(f'/api/decks/{deck}/cards',json={'front':front,'back':'Respuesta'})
+        cards=client.get(f'/api/decks/{deck}/cards').json
+        card=cards[0]['id']
+        url=f'/api/decks/{deck}/cards/{card}'
+        self.assertEqual(client.delete(f'/api/decks/{other}/cards/{card}').status_code,404)
+        self.assertEqual(len(client.get(f'/api/decks/{deck}/cards').json),2)
+        self.assertEqual(client.delete(url).status_code,200)
+        remaining=app.test_client().get(f'/api/decks/{deck}/cards').json
+        self.assertEqual(len(remaining),1)
+        self.assertNotEqual(remaining[0]['id'],card)
+        self.assertEqual(client.delete(url).status_code,404)
+        with db() as c:
+            self.assertIsNone(c.execute('SELECT 1 FROM cards WHERE id=?',(card,)).fetchone())
+
     def test_create_and_review(self):
         r=self.client.post('/api/decks',json={'name':'Biología'})
         self.assertEqual(r.status_code,201)
