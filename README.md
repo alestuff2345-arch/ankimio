@@ -108,3 +108,6 @@ Los errores de inicio muestran un diagnóstico seguro: `PG_NETWORK` (conectivida
 Si el diagnóstico es `PG_TLS_TRUST`, descargar el certificado CA desde la configuración SSL de la base de datos de Supabase. En Render → Environment → Secret Files, añadir el certificado como `supabase-ca.crt` y configurar `DATABASE_SSLROOTCERT=/etc/secrets/supabase-ca.crt`. El archivo debe contener el certificado CA público en PEM, no una clave privada. No poner esta ruta al final de `DATABASE_URL` sin codificarla; la variable independiente evita ese problema. Guardar y volver a desplegar.
 
 `PG_TLS_CA_FILE` indica que el archivo CA no existe o no se puede cargar; `PG_TLS_HOST` indica que el certificado no coincide con el hostname. La verificación completa sigue activada: no se recurre a `sslmode=disable` ni a aceptar certificados sin verificar.
+
+### Rendimiento de PostgreSQL
+Cada proceso reutiliza hasta cuatro conexiones, sin compartir una conexión entre solicitudes concurrentes. Las transacciones conservan sus límites de tiempo y la verificación TLS; las conexiones inactivas se liberan y las antiguas se renuevan. La biblioteca calcula los resúmenes únicamente para la sección abierta. Los guardados siguen confirmándose después del commit.

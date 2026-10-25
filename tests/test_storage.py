@@ -60,10 +60,25 @@ class StorageConfiguration(unittest.TestCase):
             c.execute('DELETE FROM decks WHERE id=?',('schema-preservation',))
 
     def test_failed_postgres_connection_does_not_open_sqlite(self):
-        with patch.dict(os.environ,{'DATABASE_URL':'postgresql://test@127.0.0.1/example'}),patch('storage.psycopg.connect',side_effect=psycopg.OperationalError('test connection failure')),patch('storage.sqlite3.connect') as local:
+        with patch.dict(os.environ,{'DATABASE_URL':'postgresql://test@127.0.0.1/example'}),patch('storage.postgres_pool',side_effect=psycopg.OperationalError('test connection failure')),patch('storage.sqlite3.connect') as local:
             with self.assertRaises(psycopg.OperationalError):
                 with db():pass
             local.assert_not_called()
+
+    def test_pool_is_reused_and_recreated_for_changed_configuration(self):
+        import storage
+        with patch.object(storage,'_pool',None), patch.object(storage,'_pool_key',None), \
+                patch('storage.ConnectionPool') as create, \
+                patch('storage.postgres_options',return_value={}), \
+                patch.dict(os.environ,{'DATABASE_URL':'postgresql://test@localhost/one'}):
+            first=storage.postgres_pool()
+            self.assertIs(storage.postgres_pool(),first)
+            self.assertEqual(create.call_count,1)
+            self.assertEqual(create.call_args.kwargs['max_size'],4)
+            os.environ['DATABASE_URL']='postgresql://test@localhost/two'
+            storage.postgres_pool()
+            self.assertEqual(create.call_count,2)
+            first.close.assert_called_once()
 
     def test_safe_diagnostics_distinguish_failures_without_echoing_secrets(self):
         for detail,code in (
@@ -89,6 +104,24 @@ class StorageConfiguration(unittest.TestCase):
             self.assertEqual(c.execute('SHOW search_path').fetchone()[0],'ankimio')
             self.assertEqual(c.execute('SHOW statement_timeout').fetchone()[0],'15s')
             self.assertEqual(c.execute('SHOW lock_timeout').fetchone()[0],'5s')
+
+    @unittest.skipUnless(os.environ.get('ANKIMIO_TEST_DATABASE_URL'),'Requires PostgreSQL')
+    def test_pool_reuses_connection_after_rollback_and_replaces_closed_connection(self):
+        with db() as c:
+            pid=c.execute('SELECT pg_backend_pid()').fetchone()[0]
+        with self.assertRaisesRegex(RuntimeError,'rollback'):
+            with db() as c:
+                self.assertEqual(c.execute('SELECT pg_backend_pid()').fetchone()[0],pid)
+                c.execute('INSERT INTO decks VALUES (?,?)',('pool-rollback','Rollback'))
+                raise RuntimeError('rollback')
+        with db() as c:
+            self.assertIsNone(c.execute('SELECT 1 FROM decks WHERE id=?',('pool-rollback',)).fetchone())
+            self.assertEqual(c.execute('SELECT pg_backend_pid()').fetchone()[0],pid)
+        from storage import postgres_pool
+        with postgres_pool().connection() as connection:
+            connection.close()
+        with db() as c:
+            self.assertNotEqual(c.execute('SELECT pg_backend_pid()').fetchone()[0],pid)
 
     def test_row_supports_existing_dict_and_index_access(self):
         row=Row(id='one',name='Example')

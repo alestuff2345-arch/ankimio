@@ -53,7 +53,7 @@ def decks():
     today=today_in_zone(request.args.get('timezone','UTC'))
     with db() as c:
         library=library_key(c,request.args.get('library','main'))
-        summaries=deck_summaries(c,today)
+        summaries=deck_summaries(c,today,library)
         return jsonify([dict(r,review=summaries.get(r['id'],{})) for r in c.execute(
             'SELECT decks.*,count(cards.id) AS count FROM decks '
             'LEFT JOIN deck_libraries ON deck_libraries.deck_id=decks.id '

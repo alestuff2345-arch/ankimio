@@ -80,6 +80,16 @@ class Libraries(unittest.TestCase):
         self.assertEqual(bundle['cards'][0]['front'],'Editada');self.assertEqual(bundle['cards'][0]['progress']['status'],'learned_today')
         initialize_storage();self.assertEqual(self.decks(self.section)[0]['review']['learned_today'],1)
 
+    def test_progress_summaries_only_read_selected_section(self):
+        from datetime import date
+        from review import deck_summaries
+        other=self.deck('Otra sección',self.section)
+        self.card(self.main);self.card(other)
+        with db() as c:
+            summaries=deck_summaries(c,date.today(),self.section)
+        self.assertEqual(set(summaries),{other})
+        self.assertEqual(summaries[other]['new'],1)
+
     def test_import_places_all_anki_decks_and_images_in_selected_section(self):
         raw=package()
         response=self.client.post('/api/import',data={'library':self.section,'file':(io.BytesIO(raw),'study.colpkg')})

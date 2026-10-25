@@ -2,12 +2,14 @@
 import os
 import sqlite3
 import ssl
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import class_row
+from psycopg_pool import ConnectionPool
 
 DATA = Path(os.environ.get('ANKIMIO_DATA', Path(__file__).parent / 'data'))
 DATA.mkdir(parents=True, exist_ok=True)
@@ -17,11 +19,17 @@ class Row(dict):
         return tuple(self.values())[key] if isinstance(key,int) else super().__getitem__(key)
 
 class PostgresConnection:
-    def __init__(self, connection): self.connection=connection
+    def __init__(self, connection):
+        self.connection=connection
+        self.active=True
+    def check_active(self):
+        if not self.active: raise psycopg.InterfaceError('Database context is closed')
     def execute(self, query, parameters=None):
+        self.check_active()
         if parameters is not None: query=query.replace('%','%%').replace('?','%s')
         return self.connection.execute(query,parameters)
     def executemany(self, query, parameters):
+        self.check_active()
         cursor=self.connection.cursor()
         cursor.executemany(query.replace('%','%%').replace('?','%s'),parameters)
         return cursor
@@ -60,19 +68,39 @@ def postgres_options():
     options['connect_timeout']='10'
     return options
 
+_pool = None
+_pool_key = None
+_pool_lock = threading.Lock()
+
+def postgres_pool():
+    """A small, lazy pool per worker; never share connections across requests."""
+    global _pool, _pool_key
+    key = (os.getpid(), os.environ.get('DATABASE_URL'), os.environ.get('DATABASE_SSLROOTCERT'))
+    with _pool_lock:
+        if _pool is None or _pool_key != key:
+            options = postgres_options()
+            previous = _pool
+            _pool = ConnectionPool(
+                kwargs=dict(options, row_factory=class_row(Row), prepare_threshold=None),
+                min_size=0, max_size=4, timeout=10, max_idle=60,
+                max_lifetime=300, reconnect_timeout=10, open=True)
+            _pool_key = key
+            if previous is not None: previous.close()
+        return _pool
+
 @contextmanager
 def db():
     if using_postgres():
-        connection=psycopg.connect(**postgres_options(),row_factory=class_row(Row),prepare_threshold=None)
-        try:
+        with postgres_pool().connection() as connection:
             with connection.transaction():
                 # Set these after connecting: managed poolers may reject
                 # PostgreSQL startup `options`. SET LOCAL is pooler-safe.
-                connection.execute('SET LOCAL search_path TO ankimio')
-                connection.execute("SET LOCAL statement_timeout = '15s'")
-                connection.execute("SET LOCAL lock_timeout = '5s'")
-                yield PostgresConnection(connection)
-        finally: connection.close()
+                connection.execute("SET LOCAL search_path TO ankimio; "
+                                   "SET LOCAL statement_timeout = '15s'; "
+                                   "SET LOCAL lock_timeout = '5s'")
+                wrapper=PostgresConnection(connection)
+                try: yield wrapper
+                finally: wrapper.active=False
     else:
         if os.environ.get('RENDER')=='true' or os.environ.get('ANKIMIO_REQUIRE_DATABASE')=='1':
             raise RuntimeError('Falta DATABASE_URL. Configura PostgreSQL en Render para evitar que se pierdan los mazos. No se usará almacenamiento temporal.')

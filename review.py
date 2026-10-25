@@ -73,10 +73,16 @@ def progress_for_deck(connection, key, today):
                 'LEFT JOIN card_progress ON card_progress.card_id=cards.id WHERE cards.deck=?', (key,))}
 
 
-def deck_summaries(connection, today):
+def deck_summaries(connection, today, library=None):
     summaries = {}
-    for row in connection.execute('SELECT cards.deck,card_progress.state FROM cards '
-                                  'LEFT JOIN card_progress ON card_progress.card_id=cards.id'):
+    query = ('SELECT cards.deck,card_progress.state FROM cards '
+             'LEFT JOIN card_progress ON card_progress.card_id=cards.id')
+    parameters = ()
+    if library is not None:
+        query += (" LEFT JOIN deck_libraries ON deck_libraries.deck_id=cards.deck"
+                  " WHERE COALESCE(deck_libraries.library_id,'main')=?")
+        parameters = (library,)
+    for row in connection.execute(query, parameters):
         summary = summaries.setdefault(row['deck'], dict(new=0, due=0, learned_today=0, learning=0,
                                                         consolidated=0, next_due=None))
         state = progress_view(json.loads(row['state']) if row['state'] else empty_progress(), today)
