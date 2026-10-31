@@ -49,3 +49,25 @@ test('unavailable or full storage fails safely without claiming a save',()=>{
  const {store}=setup({getItem(){throw Error('blocked');},setItem(){throw Error('quota');}});
  assert.equal(store.read('deck'),null);assert.equal(store.save(round()),false);assert.doesNotThrow(()=>store.clearAll());
 });
+test('deleting a pending or learned card reconciles counts and cannot restore it with undo',()=>{
+ const {store}=setup();
+ const pending=store.reconcile(round(),['a','b']);
+ assert.equal(pending.queue.join(','),'a');assert.equal(pending.known,1);
+ assert.equal(pending.revealed,false);assert.equal(pending.history.length,0);
+ const learned=store.reconcile(round(),['a','c']);
+ assert.equal(learned.queue.join(','),'c,a');assert.equal(learned.known,0);
+ assert.equal(learned.difficulty[0][0],'a');assert.equal(learned.history.length,0);
+ assert.equal(store.reconcile(round(),[]),null);
+});
+test('reconciliation keeps an interrupted surviving undo and adjusts its queue position',()=>{
+ const {store}=setup();const s=round();s.pendingUndo='a'.repeat(32);s.history=[{card:'a',known:1,reinsertAt:1,difficulty:0,eventId:s.pendingUndo}];
+ const next=store.reconcile(s,['a','b']);
+ assert.equal(next.history[0].reinsertAt,0);assert.equal(next.history[0].known,1);
+ assert.equal(next.pendingUndo,s.pendingUndo);
+ const removed=store.reconcile(s,['b','c']);assert.equal(removed.pendingUndo,null);assert.equal(removed.history.length,0);
+});
+test('a pending grade for a deleted card is discarded; an untouched snapshot is unchanged',()=>{
+ const {store}=setup();const s=round();s.pendingRating={card:'c',body:{rating:'hard',event_id:'c'.repeat(32),expected_revision:null,timezone:'America/Lima'}};
+ assert.equal(store.reconcile(s,['a','b']).pendingRating,null);
+ assert.equal(store.reconcile(s,s.full),s);
+});

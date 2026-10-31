@@ -6,6 +6,32 @@ from app import app
 
 class Workflow(unittest.TestCase):
     def setUp(self): self.client=app.test_client()
+    def test_delete_one_card_preserves_other_cards_and_images(self):
+        import uuid
+        from app import db
+        key=self.client.post('/api/decks',json={'name':'Eliminar una tarjeta'}).json['id']
+        other=self.client.post('/api/decks',json={'name':'Conservar otro mazo'}).json['id']
+        for deck in (key,other):
+            self.client.post(f'/api/decks/{deck}/cards',json={'front':'Pregunta','back':'Respuesta'})
+        card=self.client.get(f'/api/decks/{key}/cards').json[0]
+        remaining=self.client.get(f'/api/decks/{other}/cards').json[0]
+        url=f'/api/decks/{key}/cards/{card["id"]}'
+        event=uuid.uuid4().hex
+        self.assertEqual(self.client.post(url+'/reviews',json={'rating':'good','event_id':event,'expected_revision':None}).status_code,200)
+        self.assertEqual(self.client.delete(f'/api/decks/{other}/cards/{card["id"]}',json={'confirm':True}).status_code,404)
+        with db() as c:
+            token=uuid.uuid4().hex
+            c.execute('INSERT INTO media VALUES (?,?,?)',(token,'image/png',b'fixture-image'))
+            c.execute('UPDATE cards SET back=? WHERE id IN (?,?)',(f'<img src="/media/{token}">',card['id'],remaining['id']))
+        self.assertEqual(self.client.delete(url,json={'confirm':True}).json,{'ok':True})
+        self.assertEqual(self.client.get(f'/api/decks/{key}/cards').json,[])
+        self.assertEqual(self.client.get(f'/api/decks/{other}/cards').json[0]['id'],remaining['id'])
+        with db() as c:
+            self.assertIsNone(c.execute('SELECT 1 FROM card_progress WHERE card_id=?',(card['id'],)).fetchone())
+            self.assertIsNone(c.execute('SELECT 1 FROM review_events WHERE card_id=?',(card['id'],)).fetchone())
+            self.assertEqual(c.execute('SELECT content FROM media WHERE id=?',(token,)).fetchone()['content'],b'fixture-image')
+        retry=self.client.delete(url,json={'confirm':True})
+        self.assertEqual(retry.status_code,404);self.assertEqual(retry.json['code'],'CARD_NOT_FOUND')
     def test_delete_card_is_scoped_and_persistent(self):
         from app import db
         client=self.client

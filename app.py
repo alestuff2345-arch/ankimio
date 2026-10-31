@@ -172,7 +172,7 @@ def study_bundle(key):
 def delete_card(key,card_id):
     with db() as c:
         if not c.execute('SELECT 1 FROM cards WHERE id=? AND deck=?',(card_id,key)).fetchone():
-            return jsonify(error='La tarjeta ya no existe en este mazo.'),404
+            return jsonify(error='La tarjeta ya no existe en este mazo.',code='CARD_NOT_FOUND'),404
         c.execute('DELETE FROM review_events WHERE card_id=?',(card_id,))
         c.execute('DELETE FROM card_progress WHERE card_id=?',(card_id,))
         c.execute('DELETE FROM cards WHERE id=? AND deck=?',(card_id,key))

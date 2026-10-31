@@ -19,7 +19,33 @@ const RoundStore=(()=>{
         if(s.pendingUndo && (!token(s.pendingUndo) || s.history.at(-1)?.eventId!==s.pendingUndo))return false;
         return true;
     }
+    function reconcile(snapshot,remaining){
+        if(!valid(snapshot))return null;
+        const keep=new Set(remaining);
+        if(snapshot.full.every(c=>keep.has(c)))return snapshot;
+        const next={...snapshot,full:snapshot.full.filter(c=>keep.has(c)),round:snapshot.round.filter(c=>keep.has(c)),
+            queue:snapshot.queue.filter(c=>keep.has(c)),difficulty:snapshot.difficulty.filter(([c])=>keep.has(c)),
+            history:[],pendingUndo:null};
+        if(!next.round.length)return null;
+        next.known=next.round.length-next.queue.length;
+        next.revealed=snapshot.revealed && next.queue[0]===snapshot.queue[0];
+        if(next.pendingRating && !keep.has(next.pendingRating.card))next.pendingRating=null;
+        // Complete a previously requested undo if its card still exists. Other
+        // undo positions predate the deletion and must not resurrect a card.
+        if(snapshot.pendingUndo){
+            const h=snapshot.history.at(-1);
+            if(keep.has(h.card)){
+                const reinsertAt=h.reinsertAt===null?null:next.queue.indexOf(h.card);
+                if(reinsertAt===null || reinsertAt>=0){
+                    next.history=[{...h,reinsertAt,known:next.known-(reinsertAt===null?1:0)}];
+                    next.pendingUndo=snapshot.pendingUndo;
+                }
+            }
+        }
+        return valid(next)?next:null;
+    }
     return {
+        reconcile,
         read(deck){try{const s=JSON.parse(localStorage.getItem(prefix+deck));return valid(s) && s.deck===deck?s:null;}catch{return null;}},
         save(snapshot){try{if(!valid(snapshot))return false;localStorage.setItem(prefix+snapshot.deck,JSON.stringify(snapshot));return true;}catch{return false;}},
         remove(deck){try{localStorage.removeItem(prefix+deck);}catch{}},
