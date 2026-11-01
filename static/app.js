@@ -6,7 +6,7 @@ try{activeLibrary=localStorage.getItem('ankimio.library') || 'main';}catch{}
 function libraryQuery(library=activeLibrary){return 'library='+encodeURIComponent(library);}
 function showLibraryNavigation(){
     $('#libraries').innerHTML=[...libraryNames].map(([id,name])=>`<button type="button" data-library="${esc(id)}" ${id===activeLibrary?'aria-current="page"':''}>${id==='main'?'▦':'◈'} <span>${esc(name)}</span></button>`).join('');
-    $('#librarycrumb').textContent='Noche / '+libraryNames.get(activeLibrary);
+    $('#librarycrumb').textContent='Biblioteca / '+libraryNames.get(activeLibrary);
     $('#libraryheading').textContent=libraryNames.get(activeLibrary);
     try{localStorage.setItem('ankimio.library',activeLibrary);}catch{}
 }
