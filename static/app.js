@@ -270,13 +270,24 @@ $('#add').addEventListener('close',()=>{$('#cardstatus').textContent='';});
 $('#file').onchange=async e=>{if(!e.target.files[0])return;const form=new FormData(),library=activeLibrary,name=libraryNames.get(library);form.append('file',e.target.files[0]);form.append('library',library);notice('Importando en «'+name+'»…');try{const r=await api('/api/import',{method:'POST',body:form},120000);notice(`${r.count} tarjetas importadas en ${r.decks} mazos de «${name}». ${r.warning}`);load()}catch(e){notice(e.message)}e.target.value=''};
 let browseCards=[],browseDeck=null,browsePage=0,editingCard=null,savingEdit=false,editingDeck=null,afterCardEdit=null,editRequest=null;
 const pageSize=25;
-async function openBrowser(deck,name){
-    reviewRoundActive=false;
+async function openBrowser(deck,name,returnToReview=false){
+    const wasActive=reviewRoundActive;
+    if(wasActive)saveRound();
     try{
         const cards=await deckCards(deck);
+        reviewRoundActive=false;
         browseDeck=deck;browseCards=cards.sort((a,b)=>plain(a.front).localeCompare(plain(b.front),'es'));browsePage=0;
         $('#library').hidden=true;$('#study').hidden=false;notice('');
-        $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button><h1>Explorar mazo</h1><h2>${esc(name)}</h2><label>Buscar tarjetas<input type="search" id="cardsearch" placeholder="Buscar en preguntas y respuestas…"></label><p id="browsecount" role="status"></p><div id="cardlist"></div><div class="actions"><button id="browseprev">← Anterior</button><span id="browsepage"></span><button id="browsenext">Siguiente →</button></div>`;
+        $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button>${returnToReview?'<button id="returnreview" type="button">Volver al repaso</button>':''}<h1>Explorar mazo</h1><h2>${esc(name)}</h2><label>Buscar tarjetas<input type="search" id="cardsearch" placeholder="Buscar en preguntas y respuestas…"></label><p id="browsecount" role="status"></p><div id="cardlist"></div><div class="actions"><button id="browseprev">← Anterior</button><span id="browsepage"></span><button id="browsenext">Siguiente →</button></div>`;
+        if(returnToReview)$('#returnreview').onclick=async()=>{
+            if(savingEdit || reviewBusy)return;
+            const button=$('#returnreview');button.disabled=true;
+            try{
+                const cards=await deckCards(deck),snapshot=RoundStore.read(deck);
+                selected=deck;exam=false;
+                if(snapshot)restoreRound(snapshot,cards);else startReview([],cards);
+            }catch(error){notice(error.message);button.disabled=false;}
+        };
         $('#cardsearch').oninput=()=>{browsePage=0;renderBrowser();};
         $('#browseprev').onclick=()=>{browsePage--;renderBrowser();};
         $('#browsenext').onclick=()=>{browsePage++;renderBrowser();};
@@ -432,7 +443,7 @@ function lockReviewControls(){
         reviewBusy=false;
         controls.forEach(([b,disabled])=>{if(b.isConnected)b.disabled=disabled;});
         if(pendingRating || retryReviewAction){
-            document.querySelectorAll('#ratings button,#undoreview,#editcurrent,#deletecurrent,#again,#complicated').forEach(b=>b.disabled=true);
+            document.querySelectorAll('#ratings button,#undoreview,#editcurrent,#deletecurrent,#browsecurrent,#again,#complicated').forEach(b=>b.disabled=true);
         }
     };
 }
@@ -529,9 +540,13 @@ function showReview(){
         return;
     }
     const c=reviewQueue[0];
-    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>${reviewOnlyDifficult?'Repaso de complicadas':reviewMode==='recommended'?'Repaso recomendado':'Repaso libre'}</h2><span>${reviewKnown} / ${reviewDeck.length} completadas · ${reviewQueue.length} pendientes</span></div><p class="hint">Tu ronda se guarda automáticamente en este navegador.</p><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><div class="card-tools"><button id="editcurrent" type="button">Editar tarjeta</button><button id="deletecurrent" class="danger" type="button">Eliminar tarjeta</button></div></div>${progressHtml(c)}<div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Me resultó fácil</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p><div id="reviewstatus" role="status" aria-live="polite"></div>`;
+    $('#study').innerHTML=`<button onclick="leave()">← Mis mazos</button> ${undoReviewButton()}<div class="section-title"><h2>${reviewOnlyDifficult?'Repaso de complicadas':reviewMode==='recommended'?'Repaso recomendado':'Repaso libre'}</h2><span>${reviewKnown} / ${reviewDeck.length} completadas · ${reviewQueue.length} pendientes</span></div><p class="hint">Tu ronda se guarda automáticamente en este navegador.</p><progress value="${reviewKnown}" max="${reviewDeck.length}"></progress><div class="flashcard"><div class="card-toolbar"><span class="eyebrow">PIENSA EN LA RESPUESTA</span><div class="card-tools"><button id="browsecurrent" type="button">Explorar tarjetas</button><button id="editcurrent" type="button">Editar tarjeta</button><button id="deletecurrent" class="danger" type="button">Eliminar tarjeta</button></div></div>${progressHtml(c)}<div class="card-front">${cardHtml(c.front)}</div><div id="answer" hidden><hr><div class="card-back">${cardHtml(c.back)}</div></div></div><div class="actions"><button class="primary" id="reveal" aria-keyshortcuts="Space">Mostrar respuesta</button><div id="ratings" class="rating-actions" hidden><button data-rating="again" aria-keyshortcuts="1" class="rating-again"><span>1 · Otra vez</span><small>No me la sé</small></button><button data-rating="hard" aria-keyshortcuts="2" class="rating-hard"><span>2 · Difícil</span><small>Seguir practicando</small></button><button data-rating="good" aria-keyshortcuts="3 Space" class="rating-good"><span>3 · Bien</span><small>Me la sé</small></button><button data-rating="easy" aria-keyshortcuts="4" class="rating-easy"><span>4 · Fácil</span><small>Me resultó fácil</small></button></div></div><p class="hint" id="reviewhint">Espacio: mostrar respuesta. Las tarjetas pendientes se repiten sin esperas.</p><div id="reviewstatus" role="status" aria-live="polite"></div>`;
     $('#undoreview').onclick=undoReview;
     $('#deletecurrent').onclick=()=>deleteCurrentCard(c);
+    $('#browsecurrent').onclick=()=>{
+        if(reviewBusy || pendingRating || pendingUndo || retryReviewAction)return;
+        openBrowser(selected,'Todas las tarjetas del mazo',true);
+    };
     $('#editcurrent').onclick=()=>{
         const wasRevealed=!$('#answer').hidden;
         openCardEditor(c,selected,()=>{showReview();if(wasRevealed)$('#reveal').click();});
